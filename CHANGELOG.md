@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## 0.1.3
+### Fixed
+- GitHub Release 使用独立的 CarWithYou 签名钥，上传正式签名 APK
+
 ## 0.1.2
 ### Fixed
 - `SIGNING_KEY` 不是合法 base64 时不再阻断发版，回退 debug 签名并仍上传 APK
