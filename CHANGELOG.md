@@ -1,10 +1,13 @@
 # Changelog
 
 ## [Unreleased]
-### Added
-- Initial release
-- 手机分屏 + 自适应分辨率码率投屏
-- 车机端悬浮歌词 + 本机分屏模式
+
+## 0.1.1
+### Fixed
+- GitHub Release 不再因 Android SDK 安装失败而空发布
+- Release 正确上传车机 / 手机 APK，缺文件时失败而不是一个空 Release
+- CI 不再依赖 `android-actions/setup-android` 去安装已下线的 `tools` 包
+- 补齐 Gradle Wrapper，并将 Groovy 脚本迁到 Kotlin DSL
 
 ## 0.1.0-lite
 - 初始版本

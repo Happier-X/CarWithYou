@@ -17,6 +17,7 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
 import android.util.DisplayMetrics
+import android.view.Surface
 import android.view.WindowManager
 import kotlinx.coroutines.*
 import java.io.BufferedReader
@@ -177,7 +178,7 @@ class ScreenCastService : Service() {
             setInteger(MediaFormat.KEY_FRAME_RATE, CastConfig.FPS)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, CastConfig.IFRAME_INTERVAL)
             setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-            if (Build.VERSION.SDK_INT >= 30) setInteger(MediaCodec.KEY_LATENCY, 1)
+            if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LATENCY, 1)
         }
         val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -271,7 +272,7 @@ class ScreenCastService : Service() {
             controlServer = ServerSocket(CONTROL_PORT)
             while (scope.isActive && running) {
                 val client = try { controlServer?.accept() ?: break } catch (_: Exception) { break }
-                launch {
+                scope.launch {
                     try {
                         client.use { sock ->
                             val reader = BufferedReader(InputStreamReader(sock.getInputStream()))

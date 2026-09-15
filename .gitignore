@@ -1,10 +1,14 @@
 *.iml
 .gradle/
+.kotlin/
 local.properties
 .idea/
 .DS_Store
 /build/
 /app/build/
+/phone/build/
+tmp-logs/
+nul
 captures
 .externalNativeBuild
 .cxx

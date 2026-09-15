@@ -59,6 +59,13 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk      # 车机
 adb install -r phone/build/outputs/apk/debug/phone-debug.apk  # 手机
 ```
 
+GitHub Release 不是跑 `assembleDebug`，而是推 `v*` 标签触发 `release.yml`。成功后会上传：
+
+- `CarWithYou-car-vX.Y.Z.apk`（车机）
+- `CarWithYou-phone-vX.Y.Z.apk`（手机）
+
+`v0.1.0` 没有 APK，是因为当时 CI 在安装 Android SDK 时就失败了，Release 都没建成。
+
 先跑 `.\scripts\check-car.ps1` 把输出贴我，我帮你定分辨率和码率。
 
 ## 6. 参考

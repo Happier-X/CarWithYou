@@ -11,12 +11,33 @@ android {
         applicationId = "com.carwithyou.sender"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-sender"
+        versionCode = (project.findProperty("versionCode") as? String)?.toIntOrNull() ?: 1
+        versionName = project.findProperty("versionName") as? String ?: "0.1.0-sender"
+    }
+
+    val releaseKeyPath = System.getenv("SIGNING_KEY_FILE").orEmpty().ifBlank { "../app/release-key.jks" }
+    val releaseKeyFile = file(releaseKeyPath)
+    val canSignRelease = releaseKeyFile.isFile &&
+        !System.getenv("SIGNING_STORE_PASSWORD").isNullOrBlank()
+
+    if (canSignRelease) {
+        signingConfigs {
+            create("release") {
+                storeFile = releaseKeyFile
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: ""
+            }
+        }
     }
 
     buildTypes {
         release {
+            signingConfig = if (canSignRelease) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

@@ -11,13 +11,33 @@ android {
         applicationId = "com.carwithyou.lite"
         minSdk = 29
         targetSdk = 35
-        versionCode = (project.findProperty("versionCode") as? String)?.toInt() ?: 1
+        versionCode = (project.findProperty("versionCode") as? String)?.toIntOrNull() ?: 1
         versionName = project.findProperty("versionName") as? String ?: "0.1.0-lite"
+    }
+
+    val releaseKeyPath = System.getenv("SIGNING_KEY_FILE").orEmpty().ifBlank { "release-key.jks" }
+    val releaseKeyFile = file(releaseKeyPath)
+    val canSignRelease = releaseKeyFile.isFile &&
+        !System.getenv("SIGNING_STORE_PASSWORD").isNullOrBlank()
+
+    if (canSignRelease) {
+        signingConfigs {
+            create("release") {
+                storeFile = releaseKeyFile
+                storePassword = System.getenv("SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: ""
+            }
+        }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (canSignRelease) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -34,15 +54,6 @@ android {
     }
     buildFeatures {
         viewBinding = true
-    }
-
-    signingConfigs {
-        release {
-            storeFile = file(System.getenv("SIGNING_KEY_FILE") ?: "release-key.jks")
-            storePassword = System.getenv("SIGNING_STORE_PASSWORD") ?: ""
-            keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: ""
-            keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: ""
-        }
     }
 }
 
