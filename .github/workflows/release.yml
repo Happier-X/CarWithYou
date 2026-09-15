@@ -61,14 +61,38 @@ jobs:
 
       - name: Decode signing key
         run: |
-          if [ -n "$SIGNING_KEY" ]; then
-            echo "$SIGNING_KEY" | base64 -d > app/release-key.jks
-            echo "Release keystore decoded"
-          else
-            echo "No SIGNING_KEY secret; assembling debug-signed release APK"
-          fi
+          python3 - <<'PY'
+          import base64, os, pathlib, subprocess, sys
+          raw = os.environ.get("SIGNING_KEY", "").strip()
+          out = pathlib.Path("app/release-key.jks")
+          if not raw:
+              print("No SIGNING_KEY secret; assembling debug-signed release APK")
+              sys.exit(0)
+          try:
+              data = base64.b64decode("".join(raw.split()), validate=False)
+          except Exception as exc:
+              print(f"SIGNING_KEY is not valid base64 ({exc}); assembling debug-signed release APK")
+              sys.exit(0)
+          if len(data) < 64:
+              print("Decoded keystore is too small; assembling debug-signed release APK")
+              sys.exit(0)
+          out.write_bytes(data)
+          alias = os.environ.get("SIGNING_KEY_ALIAS", "")
+          storepass = os.environ.get("SIGNING_STORE_PASSWORD", "")
+          cmd = ["keytool", "-list", "-keystore", str(out), "-storepass", storepass]
+          if alias:
+              cmd.extend(["-alias", alias])
+          check = subprocess.run(cmd, capture_output=True, text=True)
+          if check.returncode != 0:
+              out.unlink(missing_ok=True)
+              print("Keystore/password/alias mismatch; assembling debug-signed release APK")
+              sys.exit(0)
+          print(f"Release keystore decoded ({len(data)} bytes)")
+          PY
         env:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
 
       - name: Build ${{ matrix.module }} release
         run: |

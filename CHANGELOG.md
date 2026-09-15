@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## 0.1.2
+### Fixed
+- `SIGNING_KEY` 不是合法 base64 时不再阻断发版，回退 debug 签名并仍上传 APK
+
 ## 0.1.1
 ### Fixed
 - GitHub Release 不再因 Android SDK 安装失败而空发布

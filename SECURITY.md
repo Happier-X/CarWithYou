@@ -37,4 +37,4 @@ bash scripts/github-setup.sh
 - `main` / `develop` 推送 → `ci-build.yml` 自动构建 Debug APK
 - `v*` 标签推送 → `release.yml` 自动签名构建 + 创建 GitHub Release
 - 成功后 Release 附件为 `CarWithYou-car-vX.Y.Z.apk` 和 `CarWithYou-phone-vX.Y.Z.apk`
-- 未配签名 Secret 时会改用 debug 签名，保证 APK 仍可安装，但不会再创建空 Release
+- 未配签名 Secret，或 `SIGNING_KEY` 不是合法 base64 时，会改用 debug 签名，保证 APK 仍可安装
