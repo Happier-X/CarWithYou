@@ -78,7 +78,11 @@ GitHub Release 推 `v*` 标签触发 `release.yml`，上传：
 - 有新版：弹窗显示新版本号 + 更新说明 → 「下载并安装」走 DownloadManager 下到 `下载/CarWithYou-<car|phone>-vX.Y.Z.apk`，下完自动弹安装（首次要允许「安装未知应用」）。也能点「去 GitHub」自己下。
 - 已是最新 / 检查失败（车机没网、GitHub 限流）都直接写在设置项的说明里。
 
+版本号优先走 `https://github.com/.../releases/latest` 的 302 跳转拿 tag：GitHub API 未登录只有 60 次/小时/IP，手机热点常走运营商 NAT，那点额度很容易被别人用光，所以 API 只用来顺带取更新日志（限流了照样能查出有没有新版）。真要拼下载地址就按 CI 的命名规则来：`releases/download/<tag>/CarWithYou-<car|phone>-vX.Y.Z.apk`。
+
 版本号就是 `BuildConfig.VERSION_NAME`：本地 debug 默认取 `build.gradle.kts` 里的 `0.1.4`，发版时 CI 用 `-PversionName=vX.Y.Z` 覆盖。车机端只认 Release 里的 `-car-` APK，手机端只认 `-phone-` 的。
+
+> 更新包的签名得和已装应用一致（release 包装不上 debug 包，反之亦然），不一致时系统会直接报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，得先卸载再装。
 
 ## 6. 参考
 

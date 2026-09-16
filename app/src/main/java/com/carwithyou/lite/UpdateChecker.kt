@@ -22,6 +22,7 @@ import java.net.URL
 object UpdateChecker {
 
     private const val REPO = "Happier-X/CarWithYou"
+    private const val LATEST_PAGE = "https://github.com/$REPO/releases/latest"
     private const val API = "https://api.github.com/repos/$REPO/releases/latest"
     private const val APK_MIME = "application/vnd.android.package-archive"
 
@@ -37,7 +38,7 @@ object UpdateChecker {
         class Newer(
             val version: String,
             val notes: String,
-            val apkUrl: String?,
+            val apkUrl: String,
             val pageUrl: String
         ) : Result()
 
@@ -73,23 +74,28 @@ object UpdateChecker {
         }.apply { isDaemon = true }.start()
     }
 
-    /** 阻塞式网络请求，必须在子线程调用 */
-    fun check(): Result = try {
-        val code = intArrayOf(0)
-        val body = get(API, code)
-        if (body.isNullOrBlank()) return Result.Fail(httpHint(code[0]))
-        val json = JSONObject(body)
-        val tag = json.optString("tag_name").trim()
-        if (tag.isBlank()) return Result.Fail("Release 没有版本号")
-        val latest = tag.trimStart('v', 'V')
-        val pageUrl = json.optString("html_url").ifBlank { "https://github.com/$REPO/releases" }
-        if (newerThan(latest, currentVersion)) {
-            Result.Newer(latest, json.optString("body").trim(), apkUrl(json), pageUrl)
-        } else {
-            Result.Latest(latest)
+    /**
+     * 版本号优先走 `releases/latest` 的 302 跳转（拿 Location 里的 tag），
+     * 因为 GitHub API 未登录只有 60 次/小时/IP —— 手机热点多半走运营商 NAT，
+     * 那个额度很容易被别人用掉。API 只用来"顺带"拿更新说明和 asset 名字，限流也不影响能不能检查更新。
+     */
+    fun check(): Result {
+        val api = fetchApi()
+        val tag = api?.tag?.takeIf { it.isNotBlank() } ?: fetchLatestTag()
+        if (tag.isNullOrBlank()) {
+            return Result.Fail(api?.error ?: "连不上 GitHub（车机没网？热点里手机不给外网？）")
         }
-    } catch (e: Exception) {
-        Result.Fail(e.message ?: e.javaClass.simpleName)
+        val version = tag.trimStart('v', 'V')
+        return if (newerThan(version, currentVersion)) {
+            Result.Newer(
+                version,
+                api?.notes.orEmpty(),
+                api?.apkUrl ?: downloadUrl(tag, version),
+                tagPage(tag)
+            )
+        } else {
+            Result.Latest(version)
+        }
     }
 
     /** 下载 APK，下载完直接拉安装界面 */
@@ -154,22 +160,74 @@ object UpdateChecker {
     }
 
     private fun dialog(activity: Activity, r: Result.Newer) {
-        val notes = r.notes.lines().filter { it.isNotBlank() }.take(16).joinToString("\n")
-            .ifBlank { "这个版本没写更新说明" }
+        val notes = prettyNotes(r.notes)
         runCatching {
             AlertDialog.Builder(activity)
                 .setTitle("发现新版本 v${r.version}（当前 v$currentVersion）")
                 .setMessage(notes)
-                .setPositiveButton("下载并安装") { _, _ ->
-                    val url = r.apkUrl
-                    if (url.isNullOrBlank()) openPage(activity, r.pageUrl)
-                    else downloadAndInstall(activity, url, r.version)
-                }
+                .setPositiveButton("下载并安装") { _, _ -> downloadAndInstall(activity, r.apkUrl, r.version) }
                 .setNeutralButton("去 GitHub") { _, _ -> openPage(activity, r.pageUrl) }
                 .setNegativeButton("稍后") { _, _ -> }
                 .show()
         }
     }
+
+    /** Release 说明是 CHANGELOG 原文：去掉跟弹窗标题重复的 `## 版本`，`### Added` 之类换成中文小标题 */
+    private fun prettyNotes(raw: String): String {
+        val heads = mapOf("Added" to "新增", "Changed" to "改动", "Fixed" to "修复")
+        return raw.lines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .filterNot { it.startsWith("## ") }
+            .map { line ->
+                if (line.startsWith("### ")) {
+                    val name = line.removePrefix("### ").trim()
+                    "【${heads[name] ?: name}】"
+                } else line
+            }
+            .take(16)
+            .joinToString("\n")
+            .ifBlank { "没取到更新说明，可以点「去 GitHub」看" }
+    }
+
+    /** API 拿到的信息，拿不到就整体为 null */
+    private class Api(val tag: String, val notes: String, val apkUrl: String?, val error: String?)
+
+    private fun fetchApi(): Api? {
+        val code = intArrayOf(0)
+        val body = get(API, code) ?: return null
+        val json = runCatching { JSONObject(body) }.getOrNull() ?: return null
+        val tag = json.optString("tag_name").trim()
+        if (tag.isBlank()) {
+            // 限流 / 报错时 body 里是 {"message": "..."}
+            return Api("", "", null, apiHint(code[0], json.optString("message").trim()))
+        }
+        return Api(tag, json.optString("body").trim(), apkUrl(json), null)
+    }
+
+    /** releases/latest 会 302 到 releases/tag/vX.Y.Z，这样拿版本号不吃 API 配额 */
+    private fun fetchLatestTag(): String? {
+        val conn = (URL(LATEST_PAGE).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 8_000
+            readTimeout = 8_000
+            instanceFollowRedirects = false
+            setRequestProperty("User-Agent", "CarWithYou-$ARTIFACT-update")
+        }
+        return try {
+            val loc = conn.getHeaderField("Location") ?: return null
+            Regex("/releases/tag/([^/?#]+)").find(loc)?.groupValues?.get(1)
+        } catch (_: Exception) {
+            null
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Release 里的文件名是 CI 拼的：CarWithYou-<car|phone>-vX.Y.Z.apk */
+    private fun downloadUrl(tag: String, version: String) =
+        "https://github.com/$REPO/releases/download/$tag/CarWithYou-$ARTIFACT-v$version.apk"
+
+    private fun tagPage(tag: String) = "https://github.com/$REPO/releases/tag/$tag"
 
     private fun apkUrl(json: JSONObject): String? {
         val assets = json.optJSONArray("assets") ?: return null
@@ -211,6 +269,13 @@ object UpdateChecker {
         } finally {
             conn.disconnect()
         }
+    }
+
+    private fun apiHint(code: Int, message: String): String = when {
+        code == 403 || code == 429 || message.contains("rate limit", ignoreCase = true) ->
+            "GitHub API 限流了（未登录每小时 60 次），过会儿再试"
+        message.isNotBlank() -> "GitHub 说：${message.take(60)}"
+        else -> httpHint(code)
     }
 
     private fun httpHint(code: Int): String = when (code) {

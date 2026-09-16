@@ -6,8 +6,11 @@
 
 ### Changed
 - 本地 debug 构建的 versionName/versionCode 默认跟当前发布版一致（不再写死 `0.1.0-lite` / `0.1.0-sender`），检查更新才不会被自己误报
+- 检查更新优先走 `releases/latest` 的 302 跳转取版本号，不吃 GitHub API「未登录 60 次/小时/IP」的限额（手机热点走运营商 NAT 时那点额度常被别人用光）；API 只用来顺带取更新日志，限流了也照样能查出有没有新版，真取不到就按 CI 命名规则拼下载地址
+- 更新弹窗正文把 CHANGELOG 原文换成中文小标题（`### Added` → 【新增】等），并去掉跟弹窗标题重复的 `## 版本` 行
 
 ### Fixed
+- 检查更新失败时如实报原因（GitHub 限流 / 连不上 / 还没发过 Release），之前限流会被误报成「Release 没有版本号」
 - `lintRelease` 两端归零（原 7 个 error）：`registerReceiver` 全部改走 `ContextCompat.registerReceiver`，API 33+ 的 `RECEIVER_EXPORTED` / `RECEIVER_NOT_EXPORTED` 由它统一处理，不再需要 `@Suppress`
 - 车机端不再申请 `QUERY_ALL_PACKAGES`，改为 `<queries>` 只声明导航/音乐这几个已知包名（首页状态栏的「已装N个包」相应改成「能看见N个包」）
 - 两端都不再声明 `android.software.leanback`：不是 TV App，声明了反而要求 `LEANBACK_LAUNCHER`，手机端还连带要求触屏可选
