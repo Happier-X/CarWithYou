@@ -50,7 +50,9 @@ fun SenderScreen(
     onRelaunch: () -> Unit,
     onOverlay: () -> Unit,
     onAccess: () -> Unit,
-    onBattery: () -> Unit
+    onBattery: () -> Unit,
+    updateHint: String,
+    onUpdate: () -> Unit
 ) {
     Scaffold(
         topBar = { SmallTopAppBar(title = "手机端 · 独立虚拟屏投车机") }
@@ -166,6 +168,15 @@ fun SenderScreen(
                 ArrowPreference(
                     title = "电池白名单（防杀后台）",
                     onClick = onBattery
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            SmallTitle("软件更新")
+            Card {
+                ArrowPreference(
+                    title = "检查更新",
+                    summary = updateHint,
+                    onClick = onUpdate
                 )
             }
             Spacer(Modifier.height(16.dp))

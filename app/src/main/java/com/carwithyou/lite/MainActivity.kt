@@ -24,6 +24,7 @@ class MainActivity : AppCompatActivity() {
     private var navIndex by mutableIntStateOf(0)
     private var musicIndex by mutableIntStateOf(0)
     private var status by mutableStateOf("")
+    private var updateHint by mutableStateOf(UpdateChecker.idleHint)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,7 +75,9 @@ class MainActivity : AppCompatActivity() {
                     onNotif = {
                         startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                         toast("打开 CarWithYou歌词监听 的开关")
-                    }
+                    },
+                    updateHint = updateHint,
+                    onUpdate = { UpdateChecker.checkFrom(this) { updateHint = it } }
                 )
             }
         }
@@ -101,8 +104,8 @@ class MainActivity : AppCompatActivity() {
     private fun statusText(): String {
         val overlay = if (LyricOverlayService.canDrawOverlays(this)) "悬浮窗OK" else "缺悬浮窗权限"
         val notif = if (isNotifEnabled()) "监听OK" else "缺通知监听权限"
-        val all = packageManager.getInstalledPackages(0).size
-        return "Android ${Build.VERSION.RELEASE} (SDK${Build.VERSION.SDK_INT}) · $overlay · $notif · 已装$all 个包"
+        val visible = packageManager.getInstalledPackages(0).size
+        return "Android ${Build.VERSION.RELEASE} (SDK${Build.VERSION.SDK_INT}) · $overlay · $notif · 能看见 $visible 个包"
     }
 
     private fun isNotifEnabled(): Boolean {

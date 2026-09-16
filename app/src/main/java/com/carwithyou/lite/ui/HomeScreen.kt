@@ -23,6 +23,7 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -42,7 +43,9 @@ fun HomeScreen(
     onCast: () -> Unit,
     onLyricOn: () -> Unit,
     onLyricOff: () -> Unit,
-    onNotif: () -> Unit
+    onNotif: () -> Unit,
+    updateHint: String,
+    onUpdate: () -> Unit
 ) {
     Scaffold { padding ->
         Column(
@@ -123,6 +126,14 @@ fun HomeScreen(
             }
             Spacer(Modifier.height(8.dp))
             SecondaryButton("给通知监听权限（拿歌名用）", onNotif)
+            SmallTitle("软件更新")
+            Card {
+                ArrowPreference(
+                    title = "检查更新",
+                    summary = updateHint,
+                    onClick = onUpdate
+                )
+            }
             Spacer(Modifier.height(16.dp))
             Text(
                 "自用Tips：本地歌词丢 /Music/lyrics/歌名-歌手.lrc 最准；车机热点用手机的，QQ音乐同账号登录歌单自动同步。",

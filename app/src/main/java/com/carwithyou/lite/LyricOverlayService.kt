@@ -17,6 +17,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.WindowManager
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 
 /**
  * 悬浮歌词：TYPE_APPLICATION_OVERLAY，全局浮在高德上面，可拖动。
@@ -54,13 +55,9 @@ class LyricOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         startFg()
-        @Suppress("UnspecifiedRegisterReceiverFlag")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, IntentFilter(ACTION_LYRIC_UPDATE), RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            registerReceiver(receiver, IntentFilter(ACTION_LYRIC_UPDATE))
-        }
+        ContextCompat.registerReceiver(
+            this, receiver, IntentFilter(ACTION_LYRIC_UPDATE), ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         showOverlay()
     }
 

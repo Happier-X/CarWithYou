@@ -11,8 +11,8 @@ android {
         applicationId = "com.carwithyou.lite"
         minSdk = 29
         targetSdk = 35
-        versionCode = (project.findProperty("versionCode") as? String)?.toIntOrNull() ?: 1
-        versionName = project.findProperty("versionName") as? String ?: "0.1.0-lite"
+        versionCode = (project.findProperty("versionCode") as? String)?.toIntOrNull() ?: 104
+        versionName = project.findProperty("versionName") as? String ?: "0.1.4"
     }
 
     val releaseKeyPath = System.getenv("SIGNING_KEY_FILE").orEmpty().ifBlank { "release-key.jks" }
@@ -51,6 +51,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // 「检查更新」要读 BuildConfig.VERSION_NAME
+        buildConfig = true
     }
 }
 

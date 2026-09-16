@@ -13,6 +13,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import com.carwithyou.sender.ui.DesktopScreen
 import com.carwithyou.sender.ui.theme.CarSenderTheme
 
@@ -44,12 +45,7 @@ class CarDesktopActivity : AppCompatActivity() {
         hint = "这块是车机虚拟屏 #$displayId。导航/音乐会叠在上面，手机主屏可以继续用。"
 
         val filter = IntentFilter(ACTION_STOP)
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(stopReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            registerReceiver(stopReceiver, filter)
-        }
+        ContextCompat.registerReceiver(this, stopReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
         setContent {
             CarSenderTheme {

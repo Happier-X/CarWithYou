@@ -2,18 +2,32 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 检查更新后装新 APK -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <!-- 只看导航/音乐这几个已知包名就够了，别为了列包申请 QUERY_ALL_PACKAGES -->
+    <queries>
+        <package android:name="com.autonavi.amapauto" />
+        <package android:name="com.autonavi.minimap" />
+        <package android:name="com.tencent.qqmusiccar" />
+        <package android:name="com.netease.cloudmusic" />
+        <package android:name="com.kugou.android.auto" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <!-- 车机不一定有触屏，但它是普通 Android 设备，不是 TV，别声明 leanback（否则 lint 要 LEANBACK_LAUNCHER） -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application

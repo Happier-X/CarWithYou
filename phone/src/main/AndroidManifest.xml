@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 检查更新后装新 APK -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -12,7 +14,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <uses-feature android:name="android.software.activities_on_secondary_displays" android:required="false" />
-    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <!-- 不声明 leanback：这是手机端 App 不是 TV App，声明了 lint 会要 LEANBACK_LAUNCHER/触屏可选 -->
 
     <queries>
         <package android:name="com.autonavi.minimap" />

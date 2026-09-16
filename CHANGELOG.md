@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+### Added
+- 两端设置页新增「软件更新 → 检查更新」：查 GitHub Release 最新版，有新版直接下载并拉起安装（车机端取 `-car-` APK，手机端取 `-phone-`）；顺带显示当前版本
+
+### Changed
+- 本地 debug 构建的 versionName/versionCode 默认跟当前发布版一致（不再写死 `0.1.0-lite` / `0.1.0-sender`），检查更新才不会被自己误报
+
+### Fixed
+- `lintRelease` 两端归零（原 7 个 error）：`registerReceiver` 全部改走 `ContextCompat.registerReceiver`，API 33+ 的 `RECEIVER_EXPORTED` / `RECEIVER_NOT_EXPORTED` 由它统一处理，不再需要 `@Suppress`
+- 车机端不再申请 `QUERY_ALL_PACKAGES`，改为 `<queries>` 只声明导航/音乐这几个已知包名（首页状态栏的「已装N个包」相应改成「能看见N个包」）
+- 两端都不再声明 `android.software.leanback`：不是 TV App，声明了反而要求 `LEANBACK_LAUNCHER`，手机端还连带要求触屏可选
+- `local.properties` 的 `sdk.dir` 按 properties 规范转义成 `C\:/...`，本地 lint 不再报 `PropertyEscape`
+
 ## 0.1.4
 ### Added
 - 默认独立虚拟屏投车机：导航/音乐在副屏上跑，手机主屏可继续使用

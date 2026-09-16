@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import com.carwithyou.sender.ui.SenderScreen
 import com.carwithyou.sender.ui.theme.CarSenderTheme
 
@@ -43,6 +44,7 @@ class SenderActivity : AppCompatActivity() {
     private var ipText by mutableStateOf("本机IP：--")
     private var status by mutableStateOf("未投屏")
     private var stats by mutableStateOf("未投屏")
+    private var updateHint by mutableStateOf(UpdateChecker.idleHint)
 
     private val overlayPerm = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (pendingAfterOverlay) {
@@ -104,12 +106,7 @@ class SenderActivity : AppCompatActivity() {
         ipText = "本机IP：${NetUtils.hotspotIp(this)}（车机连热点后填这个）"
 
         val filter = IntentFilter(ScreenCastService.ACTION_NEED_PROJECTION)
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(needProjection, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            registerReceiver(needProjection, filter)
-        }
+        ContextCompat.registerReceiver(this, needProjection, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
         setContent {
             CarSenderTheme {
@@ -171,7 +168,9 @@ class SenderActivity : AppCompatActivity() {
                                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
                             } else toast("已在电池白名单")
                         } catch (_: Exception) { toast("请手动：设置→电池→无限制") }
-                    }
+                    },
+                    updateHint = updateHint,
+                    onUpdate = { UpdateChecker.checkFrom(this) { updateHint = it } }
                 )
             }
         }

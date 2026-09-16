@@ -12,11 +12,13 @@
 │                         默认 PRESENTATION|OWN_CONTENT_ONLY，不镜像主屏
 │                         自适应：码率热切换；虚拟屏不切分辨率（避免杀车上 App）
 ├── CarDesktopActivity   # 跑在虚拟屏上的桌面，从这块屏拉起高德/音乐
-└── TouchInjectorService # 无障碍：把车机 TAP/SWIPE 打到虚拟屏
+├── TouchInjectorService # 无障碍：把车机 TAP/SWIPE 打到虚拟屏
+└── UpdateChecker        # 设置页「软件更新」：查 GitHub Release，直接下载安装新 APK
 
 车机端 app/  com.carwithyou.lite（热点客户端，TCP Client）
 ├── StreamReceiverActivity # 8888解码显示 + 8889控制，每2秒回报 STATS
 ├── ReceiverKeepService    # 前台保活，开机自启，电池白名单引导
+├── UpdateChecker          # 设置页「软件更新」：查 GitHub Release，直接下载安装新 APK
 └── 本机模式（MainActivity/悬浮歌词） # 车机有流量时用，不耗手机，最清晰
 ```
 
@@ -51,6 +53,7 @@
 7. 自适应码率 → 已实现
 8. **独立虚拟屏 → 已实现（默认）**
 9. 音频优化 → 当前蓝牙方案；内录是后续
+10. **检查更新 → 已做（设置页查 GitHub Release，下载即装）**
 
 ## 5. 构建安装
 
@@ -66,7 +69,16 @@ GitHub Release 推 `v*` 标签触发 `release.yml`，上传：
 - `CarWithYou-car-vX.Y.Z.apk`（车机）
 - `CarWithYou-phone-vX.Y.Z.apk`（手机）
 
-先跑 `.\scripts\check-car.ps1` 把输出贴我，我帮你定分辨率和码率。
+先跑 `.\scripts\check-car.ps1` 把输出贴我，我帮你定分辨率和码率。发版前可跑 `./gradlew :app:lintRelease :phone:lintRelease`（目前两端 0 error）。
+
+## 5.1 检查更新
+
+两端设置页都有「软件更新 → 检查更新」（车机端主页往下拉，手机端在最底下）。点一下查 GitHub 最新 Release：
+
+- 有新版：弹窗显示新版本号 + 更新说明 → 「下载并安装」走 DownloadManager 下到 `下载/CarWithYou-<car|phone>-vX.Y.Z.apk`，下完自动弹安装（首次要允许「安装未知应用」）。也能点「去 GitHub」自己下。
+- 已是最新 / 检查失败（车机没网、GitHub 限流）都直接写在设置项的说明里。
+
+版本号就是 `BuildConfig.VERSION_NAME`：本地 debug 默认取 `build.gradle.kts` 里的 `0.1.4`，发版时 CI 用 `-PversionName=vX.Y.Z` 覆盖。车机端只认 Release 里的 `-car-` APK，手机端只认 `-phone-` 的。
 
 ## 6. 参考
 
