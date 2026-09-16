@@ -57,8 +57,16 @@ class MusicLink(
             return
         }
         val md = try { c.metadata } catch (_: Exception) { null }
-        val title = md?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()
-        val artist = md?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty()
+        var title = md?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()
+        var artist = md?.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty()
+        // 部分播放器（Media3 常见）不填 TITLE/ARTIST，只给 description，空了就回落到它
+        if (title.isBlank() || artist.isBlank()) {
+            try {
+                val d = md?.description
+                if (title.isBlank()) title = d?.title?.toString().orEmpty()
+                if (artist.isBlank()) artist = d?.subtitle?.toString().orEmpty()
+            } catch (_: Exception) {}
+        }
         val app = try { c.packageName } catch (_: Exception) { "" }
         val playing = try {
             c.playbackState?.state == PlaybackState.STATE_PLAYING
@@ -71,6 +79,7 @@ class MusicLink(
         val s = "$app|$title|$artist|$playing"
         if (s == lastPush) return
         lastPush = s
+        AppLog.i("Link", "音乐同步：${app}《${title}》${artist} ${if (playing) "播放中" else "暂停"}")
         try { emit(snapshot()) } catch (_: Exception) {}
     }
 

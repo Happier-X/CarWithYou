@@ -720,6 +720,48 @@ class ScreenCastService : Service() {
         } catch (_: Exception) {}
     }
 
+    /** 发 SPS/PPS 对：0=条件不够稍后重试，1=已发真对，2=已发通用保底 */
+    private fun sendCsd(out: DataOutputStream, allowGeneric: Boolean): Int {
+        val sps = csdCache ?: sniffedSps ?: return 0
+        var pps = csdCache1 ?: sniffedPps
+        var gen = false
+        if (pps == null) {
+            if (!allowGeneric) return 0
+            pps = GENERIC_PPS
+            gen = true
+        }
+        return try {
+            out.writeInt(sps.size); out.write(sps); out.flush()
+            out.writeInt(pps.size); out.write(pps); out.flush()
+            AppLog.i(TAG, "已发 csd（sps=${sps.size}B pps=${pps.size}B${if (gen) "[通用]" else ""}），车机应秒出画面")
+            if (gen) 2 else 1
+        } catch (e: Exception) {
+            AppLog.w(TAG, "发 csd 失败：${e.message}")
+            0
+        }
+    }
+
+    /** 输出格式变了重抠 csd：部分编码器跑起来后才给，真货一到就补发升级（绿屏自愈） */
+    private fun refreshCsdFromFormat() {
+        try {
+            val of = encoder?.outputFormat ?: return
+            var updated = false
+            if (csdCache == null && of.containsKey("csd-0")) {
+                val bb = of.getByteBuffer("csd-0")
+                val b = bb?.let { ByteArray(it.remaining()).also { x -> it.get(x) } }
+                if (b != null && b.isNotEmpty()) { csdCache = b; updated = true }
+            }
+            if (csdCache1 == null && of.containsKey("csd-1")) {
+                val bb = of.getByteBuffer("csd-1")
+                val b = bb?.let { ByteArray(it.remaining()).also { x -> it.get(x) } }
+                if (b != null && b.isNotEmpty()) { csdCache1 = b; updated = true }
+            }
+            if (updated) AppLog.i(TAG, "outputFormat 补到真 csd：sps=${csdCache?.size ?: 0}B pps=${csdCache1?.size ?: 0}B")
+        } catch (e: Exception) {
+            AppLog.wThrottle(TAG, "重抠 csd 失败：${e.message}", 30_000)
+        }
+    }
+
     /** NAL 类型：Annex-B（跳起始码）/裸/AVCC 都认 */
     private fun avcType(nal: ByteArray): Int {
         if (nal.isEmpty()) return 0
@@ -776,26 +818,12 @@ class ScreenCastService : Service() {
             }
             // 先发缓存的 SPS/PPS（码流里没有时全靠这对起解码器），再推 live 流。
             // PPS 嗅不到就用通用 Baseline 默认（有真 SPS 才发，否则跳过）。
-            val sps = csdCache ?: sniffedSps
-            var pps = csdCache1 ?: sniffedPps
-            var ppsGeneric = false
-            if (sps != null && pps == null) {
-                pps = GENERIC_PPS
-                ppsGeneric = true
-            }
+            // 首连时缓存可能还没嗅到，循环里补发，不等下一次重连。
             client.use { sock ->
                 sock.soTimeout = 30_000
                 val out = DataOutputStream(sock.getOutputStream())
-                if (sps != null && pps != null) {
-                    try {
-                        out.writeInt(sps.size); out.write(sps); out.flush()
-                        out.writeInt(pps.size); out.write(pps); out.flush()
-                        AppLog.i(TAG, "已发 csd（sps=${sps.size}B pps=${pps.size}B${if (ppsGeneric) "[通用]" else ""}），车机应秒出画面")
-                    } catch (e: Exception) {
-                        AppLog.w(TAG, "发 csd 失败：${e.message}")
-                        return false
-                    }
-                }
+                var csdSent = sendCsd(out, allowGeneric = false) > 0
+                var csdRealSent = csdSent && (csdCache1 != null || sniffedPps != null)
                 val info = MediaCodec.BufferInfo()
                 var frames = 0L
                 var bytes = 0L
@@ -809,8 +837,21 @@ class ScreenCastService : Service() {
                         AppLog.w(TAG, "视频连上 10 秒了控制还没来，掐掉等车机重连")
                         break
                     }
+                    // csd 补发：嗅探后到的 SPS/PPS 不等重连，3 秒后 PPS 还没有就用通用保底。
+                    // 真对后到会再发一次升级（车机收到重启解码器，绿屏自愈）。
+                    if (!csdSent) {
+                        val r = sendCsd(out, allowGeneric = System.currentTimeMillis() - acceptAt > 3000)
+                        if (r > 0) {
+                            csdSent = true
+                            if (r == 1) csdRealSent = true
+                        }
+                    } else if (!csdRealSent) {
+                        if (sendCsd(out, allowGeneric = false) == 1) csdRealSent = true
+                    }
                     val idx = enc.dequeueOutputBuffer(info, 10_000)
-                    if (idx >= 0) {
+                    if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        refreshCsdFromFormat()
+                    } else if (idx >= 0) {
                         val buf = enc.getOutputBuffer(idx) ?: continue
                         val data = ByteArray(info.size)
                         buf.position(info.offset); buf.limit(info.offset + info.size)

@@ -291,6 +291,7 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private suspend fun pumpVideo(s: Socket) {
         val `in` = DataInputStream(s.getInputStream())
         val csd0 = mutableListOf<ByteArray>()
+        val lateCsd = mutableListOf<ByteArray>()
         var nals = 0
         while (scope.isActive && wantConnect && connected) {
             val len = try {
@@ -327,6 +328,27 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     }
                 }
                 continue
+            }
+            // 运行中又收到 SPS/PPS（手机嗅到真 PPS 后补发）：用真对重启解码器自愈。
+            // 之前 universal 保底 PPS 可能偏绿，有真货立刻换，画面自动转正。
+            if (dec != null) {
+                val lt = nalType(nal)
+                if (lt == 7 || lt == 8) {
+                    if (lateCsd.size > 6) lateCsd.clear()
+                    lateCsd += nal
+                    val has7 = lateCsd.any { nalType(it) == 7 }
+                    val has8 = lateCsd.any { nalType(it) == 8 }
+                    if (has7 && has8) {
+                        val fresh = lateCsd.toList()
+                        lateCsd.clear()
+                        AppLog.i(TAG, "收到新 csd 对，用真货重启解码器自愈")
+                        withContext(Dispatchers.Main) {
+                            releaseDecoder()
+                            startDecoder(fresh)
+                        }
+                        dec = decoder
+                    }
+                }
             }
             val t0 = System.nanoTime()
             feedNal(dec, nal)

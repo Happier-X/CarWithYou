@@ -71,24 +71,13 @@ class LinkService : Service() {
         }
     }
 
+    private val broadcastLock = Any()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var server: ServerSocket? = null
     private val writers = ConcurrentHashMap<Socket, PrintWriter>()
     private lateinit var music: MusicLink
     private lateinit var phone: PhoneLink
-
-    private val pollHandler = Handler(Looper.getMainLooper())
-    private var pollCount = 0
-    private val poll = object : Runnable {
-        override fun run() {
-            try { music.refresh() } catch (_: Exception) {}
-            // 状态（电量/信号）10 秒推一次，别刷太勤
-            if (++pollCount % 5 == 0) {
-                try { broadcast(statusSnapshot()) } catch (_: Exception) {}
-            }
-            pollHandler.postDelayed(this, 2000)
-        }
-    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -108,7 +97,18 @@ class LinkService : Service() {
         phone = PhoneLink(this) { broadcast(it) }
         phone.start()
         scope.launch { acceptLoop() }
-        pollHandler.post(poll)
+        // 轮询必须跑在 IO 线程：之前用主线程 Handler，广播一写 socket 就
+        // NetworkOnMainThreadException，直接把车机掐掉（连上几秒必断）。
+        scope.launch {
+            var n = 0
+            while (isActive && running) {
+                try { music.refresh() } catch (_: Exception) {}
+                if (++n % 5 == 0) {
+                    try { broadcast(statusSnapshot()) } catch (_: Exception) {}
+                }
+                try { delay(2000) } catch (_: Exception) { break }
+            }
+        }
         AppLog.i(TAG, "车联服务已起（:$PORT），音乐/电话走结构化同步")
     }
 
@@ -165,10 +165,17 @@ class LinkService : Service() {
                 send(out, JSONObject().put("t", "HELLO").put("ver", 2))
                 send(out, music.snapshot())
                 send(out, phone.snapshot())
+                var endCause = "unknown"
                 while (scope.isActive && running) {
-                    val line = try { reader.readLine() } catch (_: Exception) { break } ?: break
+                    val line = try {
+                        reader.readLine()
+                    } catch (e: Exception) {
+                        endCause = "readEx:${e.message}"
+                        break
+                    } ?: run { endCause = "readNull(FIN)"; break }
                     handle(line.trim())
                 }
+                AppLog.i(TAG, "车联会话结束 ${s.inetAddress}:${s.port}：$endCause")
             }
         } catch (e: Exception) {
             AppLog.wThrottle(TAG, "车联会话异常：${e.message}", 5_000)
@@ -284,14 +291,19 @@ class LinkService : Service() {
     }
 
     private fun broadcast(o: JSONObject) {
+        synchronized(broadcastLock) {
         val s = o.toString()
         val dead = mutableListOf<Socket>()
         for ((sock, out) in writers) {
             try {
                 out.println(s)
                 out.flush()
-                if (out.checkError()) dead += sock
-            } catch (_: Exception) {
+                if (out.checkError()) {
+                    AppLog.w(TAG, "广播 ${o.optString("t")} 到 ${sock.inetAddress}:${sock.port} 失败(checkError)，移除")
+                    dead += sock
+                }
+            } catch (e: Exception) {
+                AppLog.e(TAG, "广播失败", e)
                 dead += sock
             }
         }
@@ -299,13 +311,13 @@ class LinkService : Service() {
             writers.remove(d)
             try { d.close() } catch (_: Exception) {}
         }
+        }
     }
 
     override fun onDestroy() {
         AppLog.i(TAG, "车联服务退出")
         running = false
         instance = null
-        pollHandler.removeCallbacks(poll)
         try { phone.stop() } catch (_: Exception) {}
         for ((s, _) in writers) { try { s.close() } catch (_: Exception) {} }
         writers.clear()

@@ -16,6 +16,7 @@ import java.net.Socket
 object LinkClient {
 
     const val PORT = 8890
+    private const val TAG = "CarWithYou"
 
     interface Listener {
         fun onConn(ok: Boolean)
@@ -101,14 +102,36 @@ object LinkClient {
                 connected = true
                 AppLog.i("Link", "车联已连上 $ip:$PORT")
                 try { listener?.onConn(true) } catch (_: Exception) {}
+                // 链路心跳：部分网络（模拟器 NAT、某些车机热点）会掐 5 秒无流量的空闲 TCP。
+                // 每 5 秒 PING 一次，手机回 PONG，双向都有流量就不断。
+                val hb = scope.launch {
+                    while (isActive && want) {
+                        try { delay(5000) } catch (_: Exception) { break }
+                        if (!want) break
+                        try {
+                            send(JSONObject().put("t", "PING").put("ts", System.currentTimeMillis()))
+                        } catch (e: Exception) {
+                            AppLog.w(TAG, "心跳发送失败：${e.message}")
+                            break
+                        }
+                    }
+                }
                 try {
                     writer.println(JSONObject().put("t", "PING").put("ts", System.currentTimeMillis()).toString())
                     writer.flush()
                 } catch (_: Exception) {}
+                var endCause = "unknown"
                 while (scope.isActive && want) {
-                    val line = try { reader.readLine() } catch (_: Exception) { break } ?: break
+                    val line = try {
+                        reader.readLine()
+                    } catch (e: Exception) {
+                        endCause = "readEx:${e.message}"
+                        break
+                    } ?: run { endCause = "readNull(FIN)"; break }
                     onLine(line.trim())
                 }
+                try { hb.cancel() } catch (_: Exception) {}
+                AppLog.i(TAG, "车联读循环结束：$endCause")
             }
         } finally {
             synchronized(writeLock) { out = null }
