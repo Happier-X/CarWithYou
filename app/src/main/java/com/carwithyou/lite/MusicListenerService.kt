@@ -17,6 +17,7 @@ class MusicListenerService : NotificationListenerService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastKey = ""
+    private var loggedSong = ""
     private var lastLyricAt = 0L
     private var controllers: List<MediaController> = emptyList()
     private val cb = object : MediaController.Callback() {
@@ -26,11 +27,13 @@ class MusicListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        AppLog.i("Lyric", "通知监听已连上")
         attachSessions()
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        AppLog.w("Lyric", "通知监听被断开，尝试重连")
         requestRebind(android.content.ComponentName(this, MusicListenerService::class.java))
     }
 
@@ -40,7 +43,11 @@ class MusicListenerService : NotificationListenerService() {
             msm.removeOnActiveSessionsChangedListener(sessionListener)
             msm.addOnActiveSessionsChangedListener(sessionListener, null)
             onSessions(msm.getActiveSessions(null))
-        } catch (_: SecurityException) { }
+        } catch (e: SecurityException) {
+            AppLog.w("Lyric", "拿不到 MediaSession，缺通知监听权限：${e.message}")
+        } catch (e: Exception) {
+            AppLog.w("Lyric", "监听播放器失败：${e.message}")
+        }
     }
 
     private val sessionListener = MediaSessionManager.OnActiveSessionsChangedListener { onSessions(it) }
@@ -62,6 +69,10 @@ class MusicListenerService : NotificationListenerService() {
         val artist = md.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty().trim()
         if (title.isBlank()) return
         val key = "$title - $artist"
+        if (key != loggedSong) {
+            loggedSong = key
+            AppLog.i("Lyric", "切歌：$key（来自 ${playing.packageName}）")
+        }
         if (key == lastKey && System.currentTimeMillis() - lastLyricAt < 10_000) {
             // 同一首，推进度歌词
             pushProgress(playing, title, artist)
@@ -72,6 +83,9 @@ class MusicListenerService : NotificationListenerService() {
             val lines = LyricFetcher.getLyricLines(this@MusicListenerService, title, artist)
             LyricFetcher.cacheLines(key, lines)
             lastLyricAt = System.currentTimeMillis()
+            if (lines.isEmpty()) {
+                AppLog.wThrottle("Lyric", "没拿到歌词：$key（本地 /Music/lyrics 也没这个 lrc）", 20_000)
+            }
             pushProgress(playing, title, artist)
         }
     }

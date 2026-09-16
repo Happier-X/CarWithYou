@@ -36,12 +36,14 @@ fun SenderScreen(
     navIndex: Int,
     musicIndex: Int,
     virtualMode: Boolean,
+    browserMode: Boolean,
     keepScreen: Boolean,
     adaptive: Boolean,
     debugSave: Boolean,
     onNavIndex: (Int) -> Unit,
     onMusicIndex: (Int) -> Unit,
     onVirtual: (Boolean) -> Unit,
+    onBrowser: (Boolean) -> Unit,
     onKeepScreen: (Boolean) -> Unit,
     onAdaptive: (Boolean) -> Unit,
     onDebug: (Boolean) -> Unit,
@@ -52,7 +54,11 @@ fun SenderScreen(
     onAccess: () -> Unit,
     onBattery: () -> Unit,
     updateHint: String,
-    onUpdate: () -> Unit
+    onUpdate: () -> Unit,
+    logHint: String,
+    onShowLog: () -> Unit,
+    onCopyLog: () -> Unit,
+    onCopyStatus: () -> Unit
 ) {
     Scaffold(
         topBar = { SmallTopAppBar(title = "手机端 · 独立虚拟屏投车机") }
@@ -65,7 +71,7 @@ fun SenderScreen(
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Text(
-                "1.开热点  2.车机连热点  3.选导航/音乐  4.开始投屏（点一次允许）  5.车机填这个IP。声音走蓝牙，画面走WiFi。默认不占手机主屏。",
+                "1.开热点  2.车机连热点  3.选导航/音乐  4.开始投屏（点一次允许）  5.车机App连下面IP。声音走蓝牙，画面走WiFi。默认不占手机主屏。",
                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                 fontSize = 14.sp,
                 modifier = Modifier.padding(horizontal = 12.dp)
@@ -131,6 +137,12 @@ fun SenderScreen(
             SmallTitle("投屏选项")
             Card {
                 SwitchPreference(
+                    checked = browserMode,
+                    onCheckedChange = onBrowser,
+                    title = "降级：车机浏览器直连（不装App也能看）",
+                    summary = if (browserMode) "已降级：车机连热点后用浏览器打开上面地址，约15fps。正式用车机装App关掉它" else "默认关：车机装App走H264高清。车机实在装不了App才开这个"
+                )
+                SwitchPreference(
                     checked = virtualMode,
                     onCheckedChange = onVirtual,
                     title = "独立虚拟屏（推荐，不占手机）",
@@ -177,6 +189,24 @@ fun SenderScreen(
                     title = "检查更新",
                     summary = updateHint,
                     onClick = onUpdate
+                )
+            }
+            SmallTitle("诊断")
+            Card {
+                ArrowPreference(
+                    title = "诊断日志",
+                    summary = logHint,
+                    onClick = onShowLog
+                )
+                ArrowPreference(
+                    title = "复制诊断日志",
+                    summary = "出问题时点一下，把报错原文粘给开发者（含设备/版本/当前投屏状态/上次崩溃）",
+                    onClick = onCopyLog
+                )
+                ArrowPreference(
+                    title = "复制当前状态",
+                    summary = "只要 IP + 投屏状态 + 那一行实时数据",
+                    onClick = onCopyStatus
                 )
             }
             Spacer(Modifier.height(16.dp))

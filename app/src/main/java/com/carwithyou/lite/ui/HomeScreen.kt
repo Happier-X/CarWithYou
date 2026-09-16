@@ -23,7 +23,9 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -44,8 +46,16 @@ fun HomeScreen(
     onLyricOn: () -> Unit,
     onLyricOff: () -> Unit,
     onNotif: () -> Unit,
+    autoConnect: Boolean,
+    onAutoConnect: (Boolean) -> Unit,
+    phoneIpText: String,
+    onPhoneIp: (String) -> Unit,
     updateHint: String,
-    onUpdate: () -> Unit
+    onUpdate: () -> Unit,
+    logHint: String,
+    onShowLog: () -> Unit,
+    onCopyLog: () -> Unit,
+    onCopyStatus: () -> Unit
 ) {
     Scaffold { padding ->
         Column(
@@ -96,6 +106,23 @@ fun HomeScreen(
             BigButton("一键分屏：导航 + 音乐", onSplit)
             Spacer(Modifier.height(8.dp))
             SecondaryButton("保存选择", onSave)
+            SmallTitle("自动连接（上车即连）")
+            Card {
+                SwitchPreference(
+                    checked = autoConnect,
+                    onCheckedChange = onAutoConnect,
+                    title = "记住手机自动连",
+                    summary = if (autoConnect) "开机/进桌面自动连下面这个手机IP，断线自动重连" else "关了就只手动点连接"
+                )
+                TextField(
+                    value = phoneIpText,
+                    onValueChange = onPhoneIp,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    singleLine = true,
+                    label = "手机IP（连上一次自动记）",
+                    useLabelAsPlaceholder = true
+                )
+            }
             Spacer(Modifier.height(8.dp))
             BigButton("连手机虚拟屏（导航+音乐上车，手机还能用）", onCast)
             Spacer(Modifier.height(20.dp))
@@ -132,6 +159,24 @@ fun HomeScreen(
                     title = "检查更新",
                     summary = updateHint,
                     onClick = onUpdate
+                )
+            }
+            SmallTitle("诊断")
+            Card {
+                ArrowPreference(
+                    title = "诊断日志",
+                    summary = logHint,
+                    onClick = onShowLog
+                )
+                ArrowPreference(
+                    title = "复制诊断日志",
+                    summary = "出问题时点一下，把整段粘贴发回给开发者（含上次崩溃现场）",
+                    onClick = onCopyLog
+                )
+                ArrowPreference(
+                    title = "复制当前状态",
+                    summary = "只要系统版本/权限/最近一次收流状态这几行",
+                    onClick = onCopyStatus
                 )
             }
             Spacer(Modifier.height(16.dp))

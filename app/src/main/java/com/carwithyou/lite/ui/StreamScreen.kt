@@ -1,6 +1,8 @@
 package com.carwithyou.lite.ui
 
 import android.view.SurfaceView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,16 +14,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
+/**
+ * vivo 车联风格：画面全屏，控制条悬浮在顶部，状态一行小字。
+ * 画面区域触摸直接透给 SurfaceView 做反控，控制条不挡手势。
+ */
 @Composable
 fun StreamScreen(
     ip: String,
@@ -29,20 +35,23 @@ fun StreamScreen(
     onIpChange: (String) -> Unit,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onCopyLog: () -> Unit,
     onSurface: (SurfaceView) -> Unit
 ) {
-    Scaffold { padding ->
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // 全屏画面（手机虚拟屏：导航+音乐）
+        AndroidView(
+            factory = { ctx -> SurfaceView(ctx).also(onSurface) },
+            modifier = Modifier.fillMaxSize()
+        )
+        // 顶部悬浮控制条
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
+                .fillMaxWidth()
+                .background(Color(0xAA000000))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 TextField(
                     value = ip,
                     onValueChange = onIpChange,
@@ -55,35 +64,34 @@ fun StreamScreen(
                 TextButton(
                     text = "连接",
                     onClick = onConnect,
-                    modifier = Modifier.height(56.dp),
-                    minHeight = 56.dp,
+                    modifier = Modifier.height(48.dp),
+                    minHeight = 48.dp,
                     colors = ButtonDefaults.textButtonColorsPrimary()
                 )
                 Spacer(Modifier.width(8.dp))
                 TextButton(
                     text = "断开",
                     onClick = onDisconnect,
-                    modifier = Modifier.height(56.dp),
-                    minHeight = 56.dp
+                    modifier = Modifier.height(48.dp),
+                    minHeight = 48.dp
                 )
             }
             Text(
-                status,
-                modifier = Modifier.padding(horizontal = 12.dp),
-                color = MiuixTheme.colorScheme.onBackgroundVariant
-            )
-            AndroidView(
-                factory = { ctx -> SurfaceView(ctx).also(onSurface) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            )
-            Text(
-                "声音走手机蓝牙连车。默认看的是手机独立虚拟屏（高德+音乐），不是手机主屏。可点屏幕反控。",
-                modifier = Modifier.padding(12.dp),
-                color = MiuixTheme.colorScheme.onBackgroundVariant,
-                fontSize = 12.sp
+                "$status · 声音走手机蓝牙 · 点画面可反控手机虚拟屏",
+                color = Color(0xFFBBBBBB),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 4.dp)
             )
         }
+        // 右下角小按钮：复制日志（连不上/黑屏时用）
+        TextButton(
+            text = "日志",
+            onClick = onCopyLog,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(12.dp)
+                .height(40.dp),
+            minHeight = 40.dp
+        )
     }
 }

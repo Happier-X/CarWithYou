@@ -7,17 +7,21 @@
 
 ```
 手机端 phone/  com.carwithyou.sender（热点网关，TCP Server）
+├── SenderApp            # 应用内诊断日志入口（装崩溃 handler）
 ├── SenderActivity       # Compose + MIUIX 设置页：选导航/音乐 → 录屏授权 → 推流
 ├── ScreenCastService    # 独立 VirtualDisplay → H264 → 8888
 │                         默认 PRESENTATION|OWN_CONTENT_ONLY，不镜像主屏
 │                         自适应：码率热切换；虚拟屏不切分辨率（避免杀车上 App）
 ├── CarDesktopActivity   # 跑在虚拟屏上的桌面，从这块屏拉起高德/音乐
 ├── TouchInjectorService # 无障碍：把车机 TAP/SWIPE 打到虚拟屏
+├── AppLog / Diagnostics # 环形缓冲 + 崩溃留档，设置页一键复制/查看
 └── UpdateChecker        # 设置页「软件更新」：查 GitHub Release，直接下载安装新 APK
 
 车机端 app/  com.carwithyou.lite（热点客户端，TCP Client）
+├── LiteApp               # 应用内诊断日志入口（装崩溃 handler）
 ├── StreamReceiverActivity # 8888解码显示 + 8889控制，每2秒回报 STATS
 ├── ReceiverKeepService    # 前台保活，开机自启，电池白名单引导
+├── AppLog / Diagnostics   # 同上：设置页「诊断」里查看/复制
 ├── UpdateChecker          # 设置页「软件更新」：查 GitHub Release，直接下载安装新 APK
 └── 本机模式（MainActivity/悬浮歌词） # 车机有流量时用，不耗手机，最清晰
 ```
@@ -54,6 +58,7 @@
 8. **独立虚拟屏 → 已实现（默认）**
 9. 音频优化 → 当前蓝牙方案；内录是后续
 10. **检查更新 → 已做（设置页查 GitHub Release，下载即装）**
+11. **应用内诊断日志 → 已做（两端设置页「诊断」，一键复制报错）**
 
 ## 5. 构建安装
 
@@ -80,9 +85,25 @@ GitHub Release 推 `v*` 标签触发 `release.yml`，上传：
 
 版本号优先走 `https://github.com/.../releases/latest` 的 302 跳转拿 tag：GitHub API 未登录只有 60 次/小时/IP，手机热点常走运营商 NAT，那点额度很容易被别人用光，所以 API 只用来顺带取更新日志（限流了照样能查出有没有新版）。真要拼下载地址就按 CI 的命名规则来：`releases/download/<tag>/CarWithYou-<car|phone>-vX.Y.Z.apk`。
 
-版本号就是 `BuildConfig.VERSION_NAME`：本地 debug 默认取 `build.gradle.kts` 里的 `0.1.4`，发版时 CI 用 `-PversionName=vX.Y.Z` 覆盖。车机端只认 Release 里的 `-car-` APK，手机端只认 `-phone-` 的。
+版本号就是 `BuildConfig.VERSION_NAME`：本地 debug 默认取 `build.gradle.kts` 里的 `0.1.5`，发版时 CI 用 `-PversionName=vX.Y.Z` 覆盖。车机端只认 Release 里的 `-car-` APK，手机端只认 `-phone-` 的。
 
 > 更新包的签名得和已装应用一致（release 包装不上 debug 包，反之亦然），不一致时系统会直接报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，得先卸载再装。
+
+## 5.2 诊断日志（报错怎么发回来）
+
+两端都有，不用接 adb：
+
+- 入口：手机端设置页最底下「诊断」；车机端主页最底下「诊断」（投屏页顶上还有个「复制日志」按钮）。
+- **复制诊断日志**：一段文本进剪贴板，直接粘贴发回来。内容 = 设备型号 / Android 版本 / APK 版本与 versionCode / 时间 / 当前现场（虚拟屏 id、分辨率、码率、丢帧、解码耗时、RTT、热点 IP、悬浮窗/无障碍/电池白名单；车机端是连的 IP、解码器起没起、最近一次错误）/ 上次崩溃的栈 / 最近 500 条日志。
+- **诊断日志**：弹窗先看一眼，里面能「复制全文」或「清空」（正文可长按选中）。
+- **复制当前状态**：只拷 IP + 投屏状态 + 实时数据那一小段，反馈「连不上」时够用。
+
+实现要点（`AppLog`）：
+
+- 关键路径都埋了点：建虚拟屏、拿录屏授权、编解码器起停、车机连上/断开、码率调整、触摸回传、异常被 catch 的地方，原先静默吞掉的 `catch (_: Exception)` 现在会进日志。
+- 推流/解码这种热路径用 `AppLog.wThrottle` / `eThrottle`：同一条默认 5s 只记一次，剩下的合并成条数补上去（带变量的消息记得传 `key`）。
+- 崩溃靠 `Thread.setDefaultUncaughtExceptionHandler` 把栈同步写进 `SharedPreferences`（在 `SenderApp` / `LiteApp` 里装的），再转给系统原 handler，所以崩完重启照样复制得出现场。
+- 日志只存本机（内存环形缓冲 + 应用私有 prefs），不外发、不上云。
 
 ## 6. 参考
 

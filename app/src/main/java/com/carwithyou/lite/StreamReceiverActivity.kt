@@ -44,6 +44,9 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     @Volatile private var lastPong = 0L
 
     private var downNx = 0f; private var downNy = 0f; private var downT = 0L; private var downValid = false
+    @Volatile private var feedErrors = 0
+    @Volatile private var touchSendErrors = 0
+
 
     @Volatile private var nalFed = 0
     @Volatile private var nalExpected = 0
@@ -57,7 +60,12 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        AppLog.i(TAG, "进收流页：解码走 SurfaceView，控制走 8889")
         ReceiverKeepService.start(this)
+        // vivo 式自动连接：桌面/开机带 IP 直接进，不用手点连接
+        ip = intent.getStringExtra(EXTRA_IP)?.takeIf { it.isNotBlank() }
+            ?: SettingsStore(this).phoneIp.ifBlank { "192.168.43.1" }
+        val auto = intent.getBooleanExtra(EXTRA_AUTO, false)
         setContent {
             CarWithYouTheme {
                 StreamScreen(
@@ -66,9 +74,15 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     onIpChange = { ip = it },
                     onConnect = { startLoop() },
                     onDisconnect = { stopLoop() },
+                    onCopyLog = { Diagnostics.copy(this@StreamReceiverActivity) },
                     onSurface = { attachSurface(it) }
                 )
             }
+        }
+        if (auto && !wantConnect) {
+            AppLog.i(TAG, "自动连接手机 $ip")
+            // 等 Surface 就绪再连：SurfaceView 创建后 attachSurface 回调，延迟 500ms 起连
+            window.decorView.postDelayed({ startLoop() }, 500)
         }
     }
 
@@ -97,7 +111,20 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     val dist = abs(mapped.first - downNx) + abs(mapped.second - downNy)
                     val line = if (dist < 0.03 && dur < 500) "TAP ${mapped.first} ${mapped.second}"
                     else "SWIPE $downNx $downNy ${mapped.first} ${mapped.second} $dur"
-                    scope.launch { try { touchOut?.println(line); touchOut?.flush() } catch (_: Exception) {} }
+                    scope.launch {
+                        try {
+                            touchOut?.println(line)
+                            touchOut?.flush()
+                        } catch (e: Exception) {
+                            touchSendErrors++
+                            AppLog.wThrottle(
+                                TAG,
+                                "触摸发不出去（累计 $touchSendErrors 次）：${e.message}，看看手机那边无障碍开了没",
+                                5_000,
+                                key = "touchSend"
+                            )
+                        }
+                    }
                 }
             }
             true
@@ -108,6 +135,9 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
         if (wantConnect) return
         wantConnect = true
         val target = ip.trim().ifBlank { "192.168.43.1" }
+        targetIp = target
+        try { SettingsStore(this).phoneIp = target } catch (_: Exception) {}
+        AppLog.i(TAG, "开始连接手机 $target（${CastProtocol.CONTROL_PORT}/${CastProtocol.VIDEO_PORT}）")
         loopJob?.cancel()
         var attempt = 0
         loopJob = scope.launch {
@@ -119,6 +149,8 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 } catch (e: Exception) {
                     if (!wantConnect) break
                     val wait = CastProtocol.backoff(attempt++)
+                    lastError = "连不上 $target：${e.message ?: e.javaClass.name}"
+                    AppLog.wThrottle(TAG, "$lastError（${wait / 1000}s 后重连）", 3_000)
                     setStatus("连不上/${e.message}，${wait / 1000}s后重连…")
                     delay(wait)
                 }
@@ -144,6 +176,7 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     val reader = BufferedReader(InputStreamReader(cs.getInputStream()))
                     lastPong = System.currentTimeMillis()
                     connected = true
+                    AppLog.i(TAG, "控制/视频通道已连上 $ip")
                     setStatus("已连接，等画面…")
 
                     val hb = scope.launch {
@@ -155,6 +188,8 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                                 touchOut?.flush()
                             } catch (_: Exception) { break }
                             if (System.currentTimeMillis() - lastPong > CastProtocol.HB_TIMEOUT_MS) {
+                                lastError = "心跳超时（${CastProtocol.HB_TIMEOUT_MS}ms 没收到 PONG），主动断开"
+                                AppLog.w(TAG, lastError)
                                 try { vs.close() } catch (_: Exception) {}
                                 try { cs.close() } catch (_: Exception) {}
                                 break
@@ -163,7 +198,12 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     }
                     val rd = scope.launch {
                         while (isActive && wantConnect) {
-                            val line = try { reader.readLine() } catch (_: Exception) { break } ?: break
+                            val line = try {
+                                reader.readLine()
+                            } catch (e: Exception) {
+                                AppLog.wThrottle(TAG, "控制通道读取中断：${e.message}", 5_000)
+                                break
+                            } ?: break
                             onControlLine(line.trim())
                         }
                     }
@@ -185,7 +225,10 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
             connected = false; touchOut = null
             withContext(Dispatchers.Main) { releaseDecoder() }
         }
-        if (wantConnect) throw RuntimeException("连接中断")
+        if (wantConnect) {
+            AppLog.w(TAG, "会话结束：手机 $ip 连接中断")
+            throw RuntimeException("连接中断")
+        }
     }
 
     private fun resetStats() {
@@ -211,6 +254,8 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
             "CONFIG" -> {
                 videoW = p.getOrNull(1)?.toIntOrNull() ?: 0
                 videoH = p.getOrNull(2)?.toIntOrNull() ?: 0
+                lastW = videoW; lastH = videoH
+                AppLog.i(TAG, "收到 CONFIG ${videoW}x${videoH}（手机屏 ${p.getOrNull(3)}x${p.getOrNull(4)}），重建解码器")
                 scope.launch { withContext(Dispatchers.Main) { restartDecoder() } }
             }
             "PONG" -> {
@@ -232,8 +277,17 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val `in` = DataInputStream(s.getInputStream())
         val csd0 = mutableListOf<ByteArray>()
         while (scope.isActive && wantConnect && connected) {
-            val len = try { `in`.readInt() } catch (_: Exception) { break }
-            if (len <= 0 || len > 2_000_000) break
+            val len = try {
+                `in`.readInt()
+            } catch (e: Exception) {
+                AppLog.w(TAG, "视频通道断了：${e.message ?: e.javaClass.name}")
+                break
+            }
+            if (len <= 0 || len > 2_000_000) {
+                lastError = "码流长度异常 $len，断开重连"
+                AppLog.e(TAG, lastError)
+                break
+            }
             val nal = ByteArray(len)
             `in`.readFully(nal)
             totalBytes += len + 4
@@ -247,6 +301,10 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     var waits = 0
                     while (decoder == null && waits++ < 50) delay(100)
                     dec = decoder
+                    if (dec == null) {
+                        lastError = "等了 5s 解码器还没起来（看 startDecoder 的报错）"
+                        AppLog.eThrottle(TAG, lastError, null, 10_000)
+                    }
                 }
                 continue
             }
@@ -258,7 +316,12 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun startDecoder(csd: List<ByteArray>) {
-        val surface = surfaceView?.holder?.surface ?: return
+        val surface = surfaceView?.holder?.surface
+        if (surface == null || !surface.isValid) {
+            lastError = "Surface 还没就绪，解不了码"
+            AppLog.eThrottle(TAG, lastError, null, 5_000)
+            return
+        }
         try {
             val w = if (videoW > 0) videoW else 720
             val h = if (videoH > 0) videoH else 1280
@@ -267,10 +330,15 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
             dec.configure(fmt, surface, null, 0)
             dec.start()
             decoder = dec
+            decoderUp = true
             csd.forEach { feedNal(dec, it, config = true) }
+            AppLog.i(TAG, "解码器已起：${dec.name} ${w}x${h}，csd=${csd.size}")
             status = "画面来了 ${w}×${h}，点屏幕可反控"
+            statusText = status
         } catch (e: Exception) {
-            toast("解码器起不来：${e.message}")
+            lastError = "解码器起不来：${e.message ?: e.javaClass.name}"
+            AppLog.e(TAG, lastError, e)
+            toast(lastError)
         }
     }
 
@@ -295,28 +363,59 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 dec.releaseOutputBuffer(outIdx, true)
                 outIdx = dec.dequeueOutputBuffer(info, 0)
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            // 每帧都可能报错，节流记，否则一秒刷 30 条
+            feedErrors++
+            AppLog.eThrottle(
+                TAG,
+                "喂帧失败（累计 $feedErrors 次）：${e.message ?: e.javaClass.simpleName}",
+                e,
+                10_000,
+                key = "feedNal"
+            )
+        }
     }
 
     private fun stopLoop() {
         wantConnect = false; loopJob?.cancel(); disconnectUI()
     }
     private fun releaseDecoder() {
-        try { decoder?.stop(); decoder?.release() } catch (_: Exception) {}
+        try { decoder?.stop(); decoder?.release() } catch (e: Exception) {
+            AppLog.wThrottle(TAG, "释放解码器报错：${e.message}", 5_000)
+        }
         decoder = null
+        decoderUp = false
     }
     private fun disconnectUI() {
-        connected = false; status = "未连接"
+        connected = false; status = "未连接"; statusText = "未连接"
     }
-    private suspend fun setStatus(s: String) = withContext(Dispatchers.Main) { status = s }
+    private suspend fun setStatus(s: String) = withContext(Dispatchers.Main) {
+        status = s
+        statusText = s
+    }
 
     override fun surfaceCreated(h: SurfaceHolder) {}
     override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {}
     override fun surfaceDestroyed(h: SurfaceHolder) {}
     override fun onDestroy() { stopLoop(); scope.cancel(); super.onDestroy() }
-    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+    private fun toast(s: String) {
+        lastError = s
+        AppLog.w(TAG, s)
+        Toast.makeText(this, s, Toast.LENGTH_LONG).show()
+    }
 
     companion object {
+        const val EXTRA_IP = "phone_ip"
+        const val EXTRA_AUTO = "auto_connect"
         private const val EXPECTED_FPS = 30
+        private const val TAG = "CarWithYou"
+
+        // 以下给诊断日志当「现场」（LiteApp.stateText 读这里），所以放静态
+        @Volatile var statusText: String = "未连接"
+        @Volatile var targetIp: String = ""
+        @Volatile var lastW: Int = 0
+        @Volatile var lastH: Int = 0
+        @Volatile var decoderUp: Boolean = false
+        @Volatile var lastError: String = ""
     }
 }

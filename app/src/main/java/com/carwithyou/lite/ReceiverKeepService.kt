@@ -21,6 +21,7 @@ class ReceiverKeepService : Service() {
 
     companion object {
         const val CH = "keep"
+        @Volatile var running = false
 
         fun start(ctx: Context) {
             val i = Intent(ctx, ReceiverKeepService::class.java)
@@ -43,7 +44,8 @@ class ReceiverKeepService : Service() {
                         )
                     )
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                AppLog.w("Keep", "拉电池白名单失败：${e.message}")
             }
         }
     }
@@ -52,10 +54,18 @@ class ReceiverKeepService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        running = true
+        AppLog.i("Keep", "保活服务已启动")
         startFg()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+
+    override fun onDestroy() {
+        running = false
+        AppLog.w("Keep", "保活服务被停了（可能被 ROM 杀了）")
+        super.onDestroy()
+    }
 
     private fun startFg() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -77,9 +87,17 @@ class ReceiverKeepService : Service() {
                 .build()
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(3001, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            try {
+                startForeground(3001, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } catch (e: Exception) {
+                AppLog.e("Keep", "startForeground 失败：${e.message}", e)
+            }
         } else {
-            startForeground(3001, n)
+            try {
+                startForeground(3001, n)
+            } catch (e: Exception) {
+                AppLog.e("Keep", "startForeground 失败：${e.message}", e)
+            }
         }
     }
 }

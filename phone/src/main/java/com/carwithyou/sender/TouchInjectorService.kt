@@ -4,7 +4,6 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.os.Build
-import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 
@@ -24,6 +23,7 @@ class TouchInjectorService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        AppLog.i(TAG, "触摸回传无障碍服务已连上")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -31,6 +31,7 @@ class TouchInjectorService : AccessibilityService() {
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         instance = null
+        AppLog.w(TAG, "触摸回传无障碍服务已断开（车机点了也没反应）")
         return super.onUnbind(intent)
     }
 
@@ -39,7 +40,7 @@ class TouchInjectorService : AccessibilityService() {
         val x = (nx * w).coerceIn(0f, w - 1f)
         val y = (ny * h).coerceIn(0f, h - 1f)
         val path = Path().apply { moveTo(x, y) }
-        dispatch(buildGesture(path, 80))
+        dispatchGestureSafe(buildGesture(path, 80))
     }
 
     fun swipe(nx0: Float, ny0: Float, nx1: Float, ny1: Float, dur: Long) {
@@ -48,7 +49,7 @@ class TouchInjectorService : AccessibilityService() {
             moveTo((nx0 * w).coerceIn(0f, w - 1f), (ny0 * h).coerceIn(0f, h - 1f))
             lineTo((nx1 * w).coerceIn(0f, w - 1f), (ny1 * h).coerceIn(0f, h - 1f))
         }
-        dispatch(buildGesture(path, dur.coerceIn(50, 1000)))
+        dispatchGestureSafe(buildGesture(path, dur.coerceIn(50, 1000)))
     }
 
     private fun targetSize(): Pair<Float, Float> {
@@ -72,15 +73,16 @@ class TouchInjectorService : AccessibilityService() {
         if (Build.VERSION.SDK_INT >= 34) {
             builder.setDisplayId(displayId)
         } else {
-            Log.w(TAG, "gesture displayId=$displayId needs API 34+, injecting on default display")
+            AppLog.wThrottle(TAG, "gesture displayId=$displayId needs API 34+, injecting on default display", 30_000)
         }
     }
 
-    private fun dispatch(g: GestureDescription) {
+    fun dispatchGestureSafe(g: GestureDescription) {
         try {
-            dispatchGesture(g, null, null)
+            val ok = dispatchGesture(g, null, null)
+            if (!ok) AppLog.wThrottle(TAG, "dispatchGesture 排队失败（上一个手势还没完）", 5_000)
         } catch (e: Exception) {
-            Log.w(TAG, "dispatchGesture failed: ${e.message}")
+            AppLog.wThrottle(TAG, "dispatchGesture 报错：${e.message}（displayId=${CastConfig.displayId}）", 5_000)
         }
     }
 }

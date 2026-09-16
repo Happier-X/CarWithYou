@@ -31,9 +31,17 @@ object LyricFetcher {
 
     suspend fun getLyricLines(ctx: Context, title: String, artist: String): List<LyricLine> {
         // 1. 本地
-        readLocal(title, artist)?.let { if (it.isNotEmpty()) return it }
+        readLocal(title, artist)?.let {
+            if (it.isNotEmpty()) return it
+            AppLog.wThrottle("Lyric", "本地 lrc 读到了但没解析出句子（格式不对？）：$title", 20_000)
+        }
         // 2. 网络（自用，失败就返回空，不崩）
-        return try { fetchFromNetease(title, artist) } catch (_: Exception) { emptyList() }
+        return try {
+            fetchFromNetease(title, artist)
+        } catch (e: Exception) {
+            AppLog.wThrottle("Lyric", "拉网络歌词失败：${e.message ?: e.javaClass.name}（$title - $artist）", 30_000)
+            emptyList()
+        }
     }
 
     private fun readLocal(title: String, artist: String): List<LyricLine>? {
@@ -46,7 +54,10 @@ object LyricFetcher {
             )
             val f = cands.firstOrNull { it.exists() } ?: return null
             parseLrc(f.readText())
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            AppLog.wThrottle("Lyric", "读本地歌词报错：${e.message}", 30_000)
+            null
+        }
     }
 
     private fun fetchFromNetease(title: String, artist: String): List<LyricLine> {
@@ -73,7 +84,10 @@ object LyricFetcher {
         }
         return try {
             c.inputStream.bufferedReader().use { it.readText() }
-        } catch (_: Exception) { null } finally { c.disconnect() }
+        } catch (e: Exception) {
+            AppLog.d("Lyric", "歌词接口不通：${e.message} <- ${urlStr.take(48)}")
+            null
+        } finally { c.disconnect() }
     }
 
     fun parseLrc(lrc: String): List<LyricLine> {

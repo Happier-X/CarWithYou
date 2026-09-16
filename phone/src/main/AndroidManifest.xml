@@ -31,6 +31,7 @@
     </queries>
 
     <application
+        android:name=".SenderApp"
         android:allowBackup="true"
         android:icon="@android:mipmap/sym_def_app_icon"
         android:label="Car投屏-手机端"

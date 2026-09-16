@@ -66,6 +66,7 @@ object UpdateChecker {
                         toast(activity, "已是最新版 v${r.version}")
                     }
                     is Result.Fail -> {
+                        AppLog.w(TAG, "检查更新失败：${r.message}")
                         onStatus("检查失败：${r.message}")
                         toast(activity, "检查更新失败：${r.message}")
                     }
@@ -131,6 +132,7 @@ object UpdateChecker {
             )
             toast(app, "开始下载 v$version，完成后自动弹安装")
         } catch (e: Exception) {
+            AppLog.e(TAG, "APK 下载不了：${e.message ?: e.javaClass.simpleName}", e)
             toast(app, "下载不了：${e.message ?: e.javaClass.simpleName}")
             openPage(app, "https://github.com/$REPO/releases")
         }
@@ -154,7 +156,8 @@ object UpdateChecker {
         }
         try {
             context.startActivity(intent)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            AppLog.w(TAG, "拉安装界面失败：${e.message}")
             toast(context, "装不了：先允许「安装未知应用」，或手动装 下载 目录里的 APK")
         }
     }
@@ -285,6 +288,10 @@ object UpdateChecker {
         else -> "GitHub 返回 $code"
     }
 
-    private fun toast(context: Context, msg: String) =
+    private fun toast(context: Context, msg: String) {
+        AppLog.i(TAG, msg)
         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+    }
+
+    private const val TAG = "Update"
 }

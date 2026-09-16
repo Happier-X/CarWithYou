@@ -1,8 +1,20 @@
-# CarWithYou 投屏协议 v1.3（独立虚拟屏 + 自适应）
+# CarWithYou 投屏协议 v1.4（双端 + 浏览器降级）
 
-> 默认：手机建一块独立虚拟屏，导航/音乐在那块屏上跑，编码后发给车机。手机主屏空出来。
-> 兜底：关掉「独立虚拟屏」则整屏镜像（旧行为，要占手机分屏）。
+> 主链路（对标 vivo 车联 / CarPlus）：手机建一块独立虚拟屏，导航/音乐在那块屏上跑，H264 经 8888 推给车机App。手机主屏空出来。
+> 降级：打开「浏览器直连」则 MJPEG 经 HTTP 8080 推给车机自带浏览器，车机可不装 App（约15fps）。
+> 关掉「独立虚拟屏」则整屏镜像（要占手机分屏）。
 > 本文件是两端唯一的协议事实来源，改协议先改这里。
+
+## 0. 浏览器降级（默认关，车机装不了 App 时开）
+
+- 手机开热点（网关 `192.168.43.1` 固定），车机连热点后用自带浏览器打开 `http://192.168.43.1:8080/`。
+- `GET /` → 全屏播放页（`<img src=/video>` + 点/滑回传 JS，含黑边扣除）。
+- `GET /video` → `multipart/x-mixed-replace` MJPEG，约 15fps，JPEG q70，任何浏览器原生可播。
+- `GET /config` → `{"w":1280,"h":720}`。
+- `GET /tap?x=0~1&y=0~1` → 点击（视频帧归一化坐标，已扣黑边）。
+- `GET /swipe?x0=&y0=&x1=&y1=&dur=` → 滑动，同上。
+- 触摸最终走同一 `TouchInjectorService` 注入到 `CastConfig.displayId`（需开无障碍）。
+- 实现：`BrowserCastServer`（无三方依赖，ServerSocket）+ `ScreenCastService` 内 `ImageReader → Bitmap → JPEG → offerFrame`。
 
 ## 1. 拓扑（为什么是手机当 Server）
 

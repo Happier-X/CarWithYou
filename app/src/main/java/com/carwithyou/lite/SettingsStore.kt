@@ -21,4 +21,14 @@ class SettingsStore(ctx: Context) {
     var autoStart: Boolean
         get() = sp.getBoolean("autoStart", true)
         set(v) = sp.edit().putBoolean("autoStart", v).apply()
+
+    /** 上次连上的手机热点 IP，自动连接用 */
+    var phoneIp: String
+        get() = sp.getString("phoneIp", "192.168.43.1") ?: "192.168.43.1"
+        set(v) = sp.edit().putString("phoneIp", v).apply()
+
+    /** 开机/打开桌面自动连手机 */
+    var autoConnect: Boolean
+        get() = sp.getBoolean("autoConnect", true)
+        set(v) = sp.edit().putBoolean("autoConnect", v).apply()
 }

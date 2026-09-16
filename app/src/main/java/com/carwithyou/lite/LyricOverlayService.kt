@@ -62,6 +62,7 @@ class LyricOverlayService : Service() {
     }
 
     override fun onDestroy() {
+        AppLog.i("Lyric", "悬浮歌词服务退出")
         try { unregisterReceiver(receiver) } catch (_: Exception) {}
         lyricView?.let { wm?.removeView(it) }
         super.onDestroy()
@@ -91,6 +92,10 @@ class LyricOverlayService : Service() {
     @Suppress("ClickableViewAccessibility")
     private fun showOverlay() {
         if (lyricView != null) return
+        if (!canDrawOverlays(this)) {
+            AppLog.w("Lyric", "没给悬浮窗权限，加不了歌词窗口")
+            return
+        }
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         val store = SettingsStore(this)
 
@@ -144,6 +149,7 @@ class LyricOverlayService : Service() {
 
         wm?.addView(tv, params)
         lyricView = tv
+        AppLog.i("Lyric", "悬浮歌词窗口已加到屏幕")
     }
 
     private fun updateText(l1: String, l2: String) {

@@ -42,6 +42,7 @@ class CarDesktopActivity : AppCompatActivity() {
         musicPkg = intent.getStringExtra(EXTRA_MUSIC).orEmpty()
         displayId = intent.getIntExtra(EXTRA_DISPLAY_ID, Display.INVALID_DISPLAY)
         instance = this
+        AppLog.i(TAG, "车机桌面已开在 display=$displayId 导航=$navPkg 音乐=$musicPkg")
         hint = "这块是车机虚拟屏 #$displayId。导航/音乐会叠在上面，手机主屏可以继续用。"
 
         val filter = IntentFilter(ACTION_STOP)
@@ -67,6 +68,7 @@ class CarDesktopActivity : AppCompatActivity() {
         val gotId = currentDisplayId()
         if (gotId != Display.DEFAULT_DISPLAY) displayId = gotId
         if (displayId != Display.INVALID_DISPLAY && gotId == Display.DEFAULT_DISPLAY && gotId != displayId) {
+            AppLog.w(TAG, "车机桌面被系统丢回手机主屏（#$displayId → #0），finish")
             finish()
         }
     }
@@ -117,6 +119,8 @@ class CarDesktopActivity : AppCompatActivity() {
         const val EXTRA_DISPLAY_ID = "display_id"
         const val EXTRA_AUTO_LAUNCH = "auto_launch"
         const val ACTION_STOP = "com.carwithyou.sender.STOP_DESKTOP"
+
+        private const val TAG = "CarWithYou"
 
         @Volatile var instance: CarDesktopActivity? = null
     }

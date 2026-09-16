@@ -20,7 +20,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.util.DisplayMetrics
-import android.util.Log
 import android.view.Display
 import android.view.Surface
 import android.view.WindowManager
@@ -33,7 +32,13 @@ import java.net.ServerSocket
 import kotlin.math.roundToInt
 
 /**
- * 推流（8888 视频 + 8889 控制）。
+ * 推流：两种输出二选一。
+ *
+ * - 免安装模式（默认）：VirtualDisplay → ImageReader → MJPEG → HTTP 8080，
+ *   车机用自带浏览器打开 http://192.168.43.1:8080/ 即可看，无需装 APK。
+ *   触摸经浏览器 /tap /swipe 回传。
+ *
+ * - 旧 APK 模式：VirtualDisplay → H264 → 8888，需车机装 CarWithYou。
  *
  * 虚拟屏模式（默认，CarPlus 同款）：
  *   MediaProjection + PRESENTATION|OWN_CONTENT_ONLY → 独立 Display
@@ -48,10 +53,12 @@ class ScreenCastService : Service() {
     companion object {
         const val VIDEO_PORT = 8888
         const val CONTROL_PORT = 8889
+        const val BROWSER_PORT = 8080
         const val EXTRA_RESULT_CODE = "rc"
         const val EXTRA_DATA = "data"
         const val EXTRA_DEBUG_SAVE = "debug_save"
         const val EXTRA_VIRTUAL_MODE = "virtual"
+        const val EXTRA_BROWSER_MODE = "browser"
         const val EXTRA_NAV_PKG = "nav"
         const val EXTRA_MUSIC_PKG = "music"
         const val EXTRA_KEEP_SCREEN = "keep_screen"
@@ -65,7 +72,9 @@ class ScreenCastService : Service() {
         private const val FLAG_DESTROY_CONTENT_ON_REMOVAL = 1 shl 8
         @Volatile var running = false
         @Volatile var virtualMode = true
+        @Volatile var browserMode = false
         @Volatile var lastHint = ""
+        @Volatile var browserUrl = ""
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -77,6 +86,8 @@ class ScreenCastService : Service() {
     private var videoServer: ServerSocket? = null
     private var controlServer: ServerSocket? = null
     private var controlOut: PrintWriter? = null
+    private var browserServer: BrowserCastServer? = null
+    private var imageReader: android.media.ImageReader? = null
     private var overlay: CarControlOverlay? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var projectionCallback: MediaProjection.Callback? = null
@@ -101,12 +112,14 @@ class ScreenCastService : Service() {
         if (intent?.action == ACTION_RELAUNCH && running) {
             intent.getStringExtra(EXTRA_NAV_PKG)?.let { navPkg = it }
             intent.getStringExtra(EXTRA_MUSIC_PKG)?.let { musicPkg = it }
+            AppLog.i(TAG, "重新把导航/音乐丢到车机屏：$navPkg + $musicPkg")
             launchAppsOntoVirtual()
             return START_STICKY
         }
         if (running) return START_STICKY
         debugSave = intent?.getBooleanExtra(EXTRA_DEBUG_SAVE, false) == true
         virtualMode = intent?.getBooleanExtra(EXTRA_VIRTUAL_MODE, true) != false
+        browserMode = intent?.getBooleanExtra(EXTRA_BROWSER_MODE, false) != false
         CastConfig.resolutionLocked = virtualMode
         navPkg = intent?.getStringExtra(EXTRA_NAV_PKG).orEmpty()
         musicPkg = intent?.getStringExtra(EXTRA_MUSIC_PKG).orEmpty()
@@ -119,8 +132,15 @@ class ScreenCastService : Service() {
         }
         if (!virtualMode && (resultCode != Activity.RESULT_OK || projectionData == null)) {
             lastHint = "镜像模式需要录屏权限"
+            AppLog.w(TAG, lastHint + "（rc=$resultCode data=${if (projectionData == null) "null" else "ok"}）")
             return START_NOT_STICKY
         }
+        AppLog.i(
+            TAG, "开始投屏 mode=${if (virtualMode) "虚拟屏" else "镜像"} " +
+                "输出=${if (browserMode) "浏览器免安装(:$BROWSER_PORT)" else "车机APK(:$VIDEO_PORT)"} " +
+                "导航=$navPkg 音乐=$musicPkg " +
+                "录屏授权=${if (resultCode == Activity.RESULT_OK) "有" else "无"} 保存H264=$debugSave 亮屏=$keepScreen"
+        )
         startFg(withProjection = !virtualMode)
         startCast()
         return START_STICKY
@@ -133,6 +153,8 @@ class ScreenCastService : Service() {
                 .createNotificationChannel(NotificationChannel(chId, "投屏中", NotificationManager.IMPORTANCE_MIN))
         }
         val title = when {
+            browserMode && virtualMode -> "车机浏览器打开 http://192.168.43.1:$BROWSER_PORT/"
+            browserMode -> "浏览器镜像中（车机免安装）"
             virtualMode && withProjection -> "车机虚拟屏运行中（录屏授权）"
             virtualMode -> "车机虚拟屏运行中，手机可正常使用"
             else -> "CarWithYou 整屏镜像中"
@@ -183,7 +205,11 @@ class ScreenCastService : Service() {
                 )
                 dir.mkdirs()
                 debugOut = java.io.FileOutputStream(java.io.File(dir, "cast.h264"))
-            } catch (_: Exception) { debugOut = null }
+                AppLog.i(TAG, "已开 H264 保存：${dir.absolutePath}/cast.h264")
+            } catch (e: Exception) {
+                debugOut = null
+                AppLog.w(TAG, "建 cast.h264 失败，不录码流：${e.message}")
+            }
         }
         scope.launch {
             try {
@@ -193,9 +219,29 @@ class ScreenCastService : Service() {
                 densityDpi = if (virtualMode) CastConfig.VIRTUAL_DPI else dm.densityDpi
 
                 launch { startControlServer() }
-                videoServer = ServerSocket(VIDEO_PORT)
+                val ip = NetUtils.hotspotIp(this@ScreenCastService)
+                if (browserMode) {
+                    val srv = BrowserCastServer(BROWSER_PORT)
+                    browserServer = srv
+                    srv.start(scope)
+                    browserUrl = "http://$ip:$BROWSER_PORT/"
+                    AppLog.i(TAG, "免安装模式：车机浏览器打开 $browserUrl")
+                } else {
+                    videoServer = ServerSocket(VIDEO_PORT)
+                    AppLog.i(TAG, "视频端口已监听 $VIDEO_PORT")
+                }
 
-                if (virtualMode) {
+                if (browserMode) {
+                    if (virtualMode) {
+                        runVirtualBrowserSession()
+                    } else {
+                        val proj = obtainProjection() ?: throw IllegalStateException("镜像需要录屏权限")
+                        CastConfig.screenW = dm.widthPixels
+                        CastConfig.screenH = dm.heightPixels
+                        CastConfig.displayId = Display.DEFAULT_DISPLAY
+                        runMirrorBrowserSession(proj, dm.densityDpi)
+                    }
+                } else if (virtualMode) {
                     runVirtualSession()
                 } else {
                     val proj = obtainProjection() ?: throw IllegalStateException("镜像需要录屏权限")
@@ -205,7 +251,7 @@ class ScreenCastService : Service() {
                     runMirrorSession(proj, dm.densityDpi)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "startCast failed", e)
+                AppLog.e(TAG, "startCast failed", e)
                 lastHint = "启动失败：${e.message}"
                 stopSelf()
             }
@@ -216,11 +262,16 @@ class ScreenCastService : Service() {
         val data = projectionData ?: return null
         if (resultCode != Activity.RESULT_OK) return null
         val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val proj = mpm.getMediaProjection(resultCode, data) ?: return null
+        val proj = mpm.getMediaProjection(resultCode, data)
+        if (proj == null) {
+            AppLog.w(TAG, "getMediaProjection 返回 null（授权 token 过期？要重新点一次允许）")
+            return null
+        }
         projection = proj
+        AppLog.i(TAG, "拿到 MediaProjection")
         val cb = object : MediaProjection.Callback() {
             override fun onStop() {
-                Log.i(TAG, "MediaProjection stopped")
+                AppLog.i(TAG, "MediaProjection stopped（系统收了录屏授权）")
                 stopSelf()
             }
         }
@@ -254,6 +305,7 @@ class ScreenCastService : Service() {
             vdisplay = createIndependentDisplay(res.w, res.h, surface)
             if (vdisplay == null) {
                 lastHint = "系统不允许普通 App 建独立副屏，需要一次录屏授权（录的是虚拟屏，不是手机画面）"
+                AppLog.e(TAG, lastHint)
                 sendBroadcast(Intent(ACTION_NEED_PROJECTION).setPackage(packageName))
                 stopSelf()
                 return
@@ -261,7 +313,7 @@ class ScreenCastService : Service() {
         }
         val displayId = vdisplay?.display?.displayId ?: Display.INVALID_DISPLAY
         CastConfig.displayId = displayId
-        Log.i(TAG, "virtual display id=$displayId ${res.w}x${res.h} dpi=$densityDpi")
+        AppLog.i(TAG, "virtual display id=$displayId ${res.w}x${res.h} dpi=$densityDpi")
         sendConfig(res.w, res.h)
         delay(400)
         mainHandler.post { startCarDesktop(displayId) }
@@ -306,6 +358,119 @@ class ScreenCastService : Service() {
         }
     }
 
+    // ── 免安装模式：VirtualDisplay → ImageReader → MJPEG → 浏览器 ──
+
+    private suspend fun runVirtualBrowserSession() {
+        val res = virtualRes(CastConfig.currentResShort)
+        CastConfig.videoW = res.w
+        CastConfig.videoH = res.h
+        CastConfig.screenW = res.w
+        CastConfig.screenH = res.h
+        val reader = android.media.ImageReader.newInstance(res.w, res.h, android.graphics.PixelFormat.RGBA_8888, 2)
+        imageReader = reader
+        browserServer?.videoW = res.w
+        browserServer?.videoH = res.h
+        val haveProjection = projectionData != null && resultCode == Activity.RESULT_OK
+        if (haveProjection) {
+            startFg(withProjection = true)
+            val proj = obtainProjection() ?: run {
+                sendBroadcast(Intent(ACTION_NEED_PROJECTION).setPackage(packageName))
+                stopSelf()
+                return
+            }
+            vdisplay = createProjectionDisplay(proj, res.w, res.h, reader.surface)
+        } else {
+            vdisplay = createIndependentDisplay(res.w, res.h, reader.surface)
+            if (vdisplay == null) {
+                lastHint = "系统不允许普通 App 建独立副屏，需要一次录屏授权（录的是虚拟屏，不是手机画面）"
+                AppLog.e(TAG, lastHint)
+                sendBroadcast(Intent(ACTION_NEED_PROJECTION).setPackage(packageName))
+                stopSelf()
+                return
+            }
+        }
+        onBrowserDisplayReady(res.w, res.h)
+        pumpMjpeg(reader, res.w, res.h)
+    }
+
+    private suspend fun runMirrorBrowserSession(proj: MediaProjection, dpi: Int) {
+        val res = mirrorRes(CastConfig.currentResShort, CastConfig.screenW, CastConfig.screenH)
+        CastConfig.videoW = res.w
+        CastConfig.videoH = res.h
+        val reader = android.media.ImageReader.newInstance(res.w, res.h, android.graphics.PixelFormat.RGBA_8888, 2)
+        imageReader = reader
+        browserServer?.videoW = res.w
+        browserServer?.videoH = res.h
+        vdisplay = proj.createVirtualDisplay(
+            "carwithyou-mirror", res.w, res.h, dpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            reader.surface, null, mainHandler
+        )
+        AppLog.i(TAG, "浏览器镜像屏 ${res.w}x${res.h}")
+        pumpMjpeg(reader, res.w, res.h)
+    }
+
+    private fun onBrowserDisplayReady(w: Int, h: Int) {
+        val displayId = vdisplay?.display?.displayId ?: Display.INVALID_DISPLAY
+        CastConfig.displayId = displayId
+        AppLog.i(TAG, "browser virtual display id=$displayId ${w}x${h} dpi=$densityDpi")
+        sendConfig(w, h)
+        scope.launch { delay(400); mainHandler.post { startCarDesktop(displayId) } }
+        sendBroadcast(Intent(ACTION_VIRTUAL_READY).setPackage(packageName))
+        mainHandler.postDelayed({ showOverlay() }, 800)
+        mainHandler.postDelayed({
+            if (CarDesktopActivity.instance == null) {
+                lastHint = "系统没把桌面放到副屏，已直接拉起导航/音乐。若它们出现在手机上，请改用镜像模式。"
+                launchAppsOntoVirtual()
+            }
+        }, 1600)
+    }
+
+    /** ImageReader → Bitmap → JPEG(70) → BrowserCastServer，约15fps，车机浏览器原生可播 */
+    private suspend fun pumpMjpeg(reader: android.media.ImageReader, w: Int, h: Int) {
+        val out = java.io.ByteArrayOutputStream(128 * 1024)
+        var lastAt = 0L
+        AppLog.i(TAG, "MJPEG 推流开始 ${w}x${h} → :$BROWSER_PORT/video")
+        while (scope.isActive && running) {
+            try {
+                val img = reader.acquireLatestImage()
+                if (img == null) { delay(33); continue }
+                try {
+                    val now = System.currentTimeMillis()
+                    if (now - lastAt < 66) continue // ~15fps，省电省流量
+                    lastAt = now
+                    val bmp = imageToBitmap(img, w, h)
+                    if (bmp != null) {
+                        out.reset()
+                        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, out)
+                        bmp.recycle()
+                        val bytes = out.toByteArray()
+                        if (bytes.isNotEmpty()) browserServer?.offerFrame(bytes)
+                    }
+                } finally { try { img.close() } catch (_: Exception) {} }
+            } catch (e: Exception) {
+                AppLog.wThrottle(TAG, "MJPEG 采集失败：${e.message}", 5_000)
+                delay(100)
+            }
+        }
+    }
+
+    private fun imageToBitmap(img: android.media.Image, w: Int, h: Int): android.graphics.Bitmap? {
+        try {
+            val plane = img.planes[0]
+            val buf = plane.buffer
+            val rowStride = plane.rowStride
+            val pixelStride = plane.pixelStride
+            val rowPixels = rowStride / pixelStride
+            val bmp = android.graphics.Bitmap.createBitmap(rowPixels, h, android.graphics.Bitmap.Config.ARGB_8888)
+            bmp.copyPixelsFromBuffer(buf)
+            return if (rowPixels == w) bmp else android.graphics.Bitmap.createBitmap(bmp, 0, 0, w, h).also { bmp.recycle() }
+        } catch (e: Exception) {
+            AppLog.wThrottle(TAG, "Image→Bitmap 失败：${e.message}", 5_000)
+            return null
+        }
+    }
+
     /** 不镜像主屏：优先 DisplayManager（无录屏条），失败再走 MediaProjection */
     private fun createIndependentDisplay(w: Int, h: Int, surface: Surface): VirtualDisplay? {
         val dm = getSystemService(DISPLAY_SERVICE) as DisplayManager
@@ -319,16 +484,17 @@ class ScreenCastService : Service() {
                 val vd = dm.createVirtualDisplay(
                     "carwithyou-virtual", w, h, densityDpi, surface, flags, null, mainHandler
                 )
-                Log.i(TAG, "DisplayManager virtual display flags=$flags id=${vd.display.displayId}")
+                AppLog.i(TAG, "DisplayManager virtual display flags=$flags id=${vd.display.displayId}")
                 return vd
             } catch (e: Exception) {
-                Log.w(TAG, "DisplayManager flags=$flags rejected: ${e.message}")
+                AppLog.w(TAG, "DisplayManager flags=$flags rejected: ${e.message}")
             }
         }
         return null
     }
 
     private fun createProjectionDisplay(proj: MediaProjection, w: Int, h: Int, surface: Surface): VirtualDisplay {
+        AppLog.i(TAG, "用 MediaProjection 建虚拟屏 ${w}x${h}@$densityDpi")
         val presentation = DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION or
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
         val publicFlags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or presentation
@@ -344,7 +510,7 @@ class ScreenCastService : Service() {
                 return vd
             } catch (e: Exception) {
                 last = e
-                Log.w(TAG, "projection display flags=$flags rejected: ${e.message}")
+                AppLog.w(TAG, "projection display flags=$flags rejected: ${e.message}")
             }
         }
         throw last ?: IllegalStateException("createVirtualDisplay failed")
@@ -364,7 +530,7 @@ class ScreenCastService : Service() {
         try {
             startActivity(intent, opts.toBundle())
         } catch (e: Exception) {
-            Log.w(TAG, "start CarDesktop failed: ${e.message}")
+            AppLog.w(TAG, "start CarDesktop failed: ${e.message}")
             lastHint = "虚拟桌面启动失败：${e.message}"
         }
     }
@@ -418,14 +584,18 @@ class ScreenCastService : Service() {
         enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface = enc.createInputSurface()
         enc.start()
+        AppLog.i(TAG, "编码器已起：${enc.name} ${w}x${h} @%.1fM ${CastConfig.FPS}fps".format(bitrate / 1_000_000f))
         return enc to surface
     }
 
     private fun sendConfig(w: Int, h: Int) {
+        AppLog.i(TAG, "发 CONFIG $w $h（触摸坐标系 ${CastConfig.screenW}x${CastConfig.screenH}）")
         try {
             controlOut?.println("CONFIG $w $h ${CastConfig.screenW} ${CastConfig.screenH}")
             controlOut?.flush()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            AppLog.w(TAG, "CONFIG 发不出去：${e.message}")
+        }
     }
 
     /**
@@ -436,6 +606,7 @@ class ScreenCastService : Service() {
         var needResize = false
         try {
             val client = videoServer?.accept() ?: return false
+            AppLog.i(TAG, "车机连上视频端口 $VIDEO_PORT")
             client.use { sock ->
                 val out = DataOutputStream(sock.getOutputStream())
                 val info = MediaCodec.BufferInfo()
@@ -452,7 +623,10 @@ class ScreenCastService : Service() {
                                 out.writeInt(data.size)
                                 out.write(data)
                                 out.flush()
-                            } catch (_: Exception) { break }
+                            } catch (e: Exception) {
+                                AppLog.w(TAG, "写视频数据断车机：${e.message}")
+                                break
+                            }
                             try {
                                 debugOut?.write(byteArrayOf(0, 0, 0, 1))
                                 debugOut?.write(data)
@@ -467,7 +641,9 @@ class ScreenCastService : Service() {
                                         putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, CastConfig.currentBitrate)
                                     }
                                     enc.setParameters(params)
-                                } catch (_: Exception) {}
+                                } catch (e: Exception) {
+                                    AppLog.wThrottle(TAG, "改码率失败：${e.message}", 10_000)
+                                }
                             }
                             1 -> {
                                 if (allowResize) {
@@ -507,7 +683,9 @@ class ScreenCastService : Service() {
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            AppLog.wThrottle(TAG, "推流循环退出：${e.message ?: e.javaClass.name}", 5_000)
+        }
         return needResize
     }
 
@@ -517,32 +695,51 @@ class ScreenCastService : Service() {
                 putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, CastConfig.currentBitrate)
             }
             enc.setParameters(params)
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            AppLog.wThrottle(TAG, "applyBitrate 失败：${e.message}", 10_000)
+        }
     }
 
     private fun startControlServer() {
         try {
             controlServer = ServerSocket(CONTROL_PORT)
+            AppLog.i(TAG, "控端口已监听 $CONTROL_PORT，等车机连")
             while (scope.isActive && running) {
-                val client = try { controlServer?.accept() ?: break } catch (_: Exception) { break }
+                val client = try {
+                    controlServer?.accept() ?: break
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "控端口 accept 退出：${e.message}")
+                    break
+                }
                 scope.launch {
                     try {
                         client.use { sock ->
                             val reader = BufferedReader(InputStreamReader(sock.getInputStream()))
                             val out = PrintWriter(sock.getOutputStream(), true)
                             controlOut = out
+                            AppLog.i(TAG, "车机连上控端口 ${sock.inetAddress}:${sock.port}")
                             sendConfig(CastConfig.videoW, CastConfig.videoH)
                             while (isActive && running) {
-                                val line = try { reader.readLine() } catch (_: Exception) { break } ?: break
+                                val line = try {
+                                    reader.readLine()
+                                } catch (e: Exception) {
+                                    AppLog.wThrottle(TAG, "控制通道读中断：${e.message}", 5_000)
+                                    break
+                                } ?: break
                                 handleControl(line.trim())
                             }
                         }
-                    } catch (_: Exception) {} finally {
+                    } catch (e: Exception) {
+                        AppLog.wThrottle(TAG, "控制会话异常：${e.message}", 5_000)
+                    } finally {
                         if (controlOut != null) controlOut = null
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            AppLog.e(TAG, "建控制端口失败（$CONTROL_PORT 被占？）：${e.message}", e)
+            lastHint = "建控制端口失败：${e.message}"
+        }
     }
 
     private fun handleControl(line: String) {
@@ -559,8 +756,10 @@ class ScreenCastService : Service() {
                 val x = p.getOrNull(1)?.toFloatOrNull() ?: return
                 val y = p.getOrNull(2)?.toFloatOrNull() ?: return
                 val svc = TouchInjectorService.instance
-                if (svc == null) lastHint = "没开无障碍，车机点了也注入不了"
-                else svc.tap(x, y)
+                if (svc == null) {
+                    lastHint = "没开无障碍，车机点了也注入不了"
+                    AppLog.wThrottle(TAG, lastHint, 10_000)
+                } else svc.tap(x, y)
             }
             "SWIPE" -> {
                 val x0 = p.getOrNull(1)?.toFloatOrNull() ?: return
@@ -569,8 +768,10 @@ class ScreenCastService : Service() {
                 val y1 = p.getOrNull(4)?.toFloatOrNull() ?: return
                 val dur = p.getOrNull(5)?.toLongOrNull() ?: 300L
                 val svc = TouchInjectorService.instance
-                if (svc == null) lastHint = "没开无障碍，车机点了也注入不了"
-                else svc.swipe(x0, y0, x1, y1, dur)
+                if (svc == null) {
+                    lastHint = "没开无障碍，车机点了也注入不了"
+                    AppLog.wThrottle(TAG, lastHint, 10_000)
+                } else svc.swipe(x0, y0, x1, y1, dur)
             }
         }
     }
@@ -588,7 +789,10 @@ class ScreenCastService : Service() {
                 it.setReferenceCounted(false)
                 it.acquire()
             }
-        } catch (_: Exception) {}
+            AppLog.i(TAG, "已持 wakeLock（${if (keepScreen) "SCREEN_DIM" else "PARTIAL"}）")
+        } catch (e: Exception) {
+            AppLog.w(TAG, "拿 wakeLock 失败，灭屏可能断投屏：${e.message}")
+        }
     }
 
     private fun releaseEncoderAndDisplay() {
@@ -598,15 +802,21 @@ class ScreenCastService : Service() {
         encoder = null
         try { encoderSurface?.release() } catch (_: Exception) {}
         encoderSurface = null
+        try { imageReader?.close() } catch (_: Exception) {}
+        imageReader = null
     }
 
     override fun onDestroy() {
+        AppLog.i(TAG, "ScreenCastService 退出")
         running = false
         try { sendBroadcast(Intent(CarDesktopActivity.ACTION_STOP).setPackage(packageName)) } catch (_: Exception) {}
         try { overlay?.hide() } catch (_: Exception) {}
         overlay = null
         try { videoServer?.close() } catch (_: Exception) {}
         try { controlServer?.close() } catch (_: Exception) {}
+        try { browserServer?.stop() } catch (_: Exception) {}
+        browserServer = null
+        browserUrl = ""
         releaseEncoderAndDisplay()
         try {
             projectionCallback?.let { cb ->

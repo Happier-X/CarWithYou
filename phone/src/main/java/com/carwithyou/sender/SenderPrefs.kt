@@ -17,6 +17,10 @@ class SenderPrefs(ctx: Context) {
         get() = sp.getBoolean("virtual", true)
         set(v) { sp.edit().putBoolean("virtual", v).apply() }
 
+    var browserMode: Boolean
+        get() = sp.getBoolean("browser", false)
+        set(v) { sp.edit().putBoolean("browser", v).apply() }
+
     var keepScreenOn: Boolean
         get() = sp.getBoolean("keep_screen", true)
         set(v) { sp.edit().putBoolean("keep_screen", v).apply() }
