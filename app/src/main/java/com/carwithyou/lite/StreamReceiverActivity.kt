@@ -5,10 +5,16 @@ import android.media.MediaFormat
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
-import com.carwithyou.lite.databinding.ActivityStreamBinding
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.carwithyou.lite.ui.StreamScreen
+import com.carwithyou.lite.ui.theme.CarWithYouTheme
 import kotlinx.coroutines.*
 import java.io.BufferedReader
 import java.io.DataInputStream
@@ -19,17 +25,17 @@ import java.net.Socket
 import kotlin.math.abs
 
 /**
- * 车机收流（协议 v1.2，见 docs/PROTOCOL.md）：
+ * 车机收流（协议 v1.3，见 docs/PROTOCOL.md）：
  * 连手机 8888 看画面，8889 走控制（CONFIG/触摸/心跳/STATS）。
- * 每 2 秒上报 STATS（丢帧率/解码耗时/实测码率/RTT），手机据此自适应。
+ * 画面仍用 SurfaceView 解码，外壳是 Compose。
  */
 class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
-    private lateinit var binding: ActivityStreamBinding
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loopJob: Job? = null
     private var decoder: MediaCodec? = null
     private var touchOut: PrintWriter? = null
+    private var surfaceView: SurfaceView? = null
 
     @Volatile private var wantConnect = false
     @Volatile private var connected = false
@@ -39,23 +45,39 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private var downNx = 0f; private var downNy = 0f; private var downT = 0L; private var downValid = false
 
-    // ── 自适应统计（2秒窗口） ────────────────────────
-    @Volatile private var nalFed = 0            // 2秒内成功 feedNal 的次数（≈帧数）
-    @Volatile private var nalExpected = 0       // 2秒内期望帧数（=fps*2）
-    @Volatile private var totalDecodeNs = 0L    // 解码总耗时(ns)
-    @Volatile private var totalBytes = 0L       // 收到的字节数（含4字节长度头）
-    private var lastPingTs = 0L       // 最近一次 PING 发送时间
+    @Volatile private var nalFed = 0
+    @Volatile private var nalExpected = 0
+    @Volatile private var totalDecodeNs = 0L
+    @Volatile private var totalBytes = 0L
+    private var lastPingTs = 0L
+
+    private var ip by mutableStateOf("192.168.43.1")
+    private var status by mutableStateOf("未连接")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityStreamBinding.inflate(layoutInflater)
-        setContentView(binding.root)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        binding.etIp.setText("192.168.43.1")
-        binding.surface.holder.addCallback(this)
         ReceiverKeepService.start(this)
+        setContent {
+            CarWithYouTheme {
+                StreamScreen(
+                    ip = ip,
+                    status = status,
+                    onIpChange = { ip = it },
+                    onConnect = { startLoop() },
+                    onDisconnect = { stopLoop() },
+                    onSurface = { attachSurface(it) }
+                )
+            }
+        }
+    }
 
-        binding.surface.setOnTouchListener { v, e ->
+    private fun attachSurface(view: SurfaceView) {
+        if (surfaceView === view) return
+        surfaceView?.holder?.removeCallback(this)
+        surfaceView = view
+        view.holder.addCallback(this)
+        view.setOnTouchListener { v, e ->
             if (!connected) return@setOnTouchListener false
             val vw = videoW.toFloat(); val vh = videoH.toFloat()
             val mapped = if (vw > 0 && vh > 0) {
@@ -80,21 +102,19 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
             }
             true
         }
-        binding.btnConnect.setOnClickListener { startLoop() }
-        binding.btnDisconnect.setOnClickListener { stopLoop() }
     }
 
     private fun startLoop() {
         if (wantConnect) return
         wantConnect = true
-        val ip = binding.etIp.text.toString().trim()
+        val target = ip.trim().ifBlank { "192.168.43.1" }
         loopJob?.cancel()
         var attempt = 0
         loopJob = scope.launch {
             while (wantConnect && isActive) {
                 try {
-                    setStatus("连接 $ip …（第${attempt + 1}次）")
-                    runSession(ip)
+                    setStatus("连接 $target …（第${attempt + 1}次）")
+                    runSession(target)
                     attempt = 0
                 } catch (e: Exception) {
                     if (!wantConnect) break
@@ -126,7 +146,6 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     connected = true
                     setStatus("已连接，等画面…")
 
-                    // 心跳（5s）
                     val hb = scope.launch {
                         while (isActive && wantConnect && connected) {
                             delay(CastProtocol.HB_INTERVAL_MS)
@@ -142,14 +161,12 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                             }
                         }
                     }
-                    // 控制行读取
                     val rd = scope.launch {
                         while (isActive && wantConnect) {
                             val line = try { reader.readLine() } catch (_: Exception) { break } ?: break
                             onControlLine(line.trim())
                         }
                     }
-                    // STATS 上报（每 2 秒）
                     val statsJob = scope.launch {
                         while (isActive && wantConnect && connected) {
                             delay(2000)
@@ -171,7 +188,6 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
         if (wantConnect) throw RuntimeException("连接中断")
     }
 
-    // ── 统计 ──────────────────────────────────────
     private fun resetStats() {
         nalFed = 0; nalExpected = EXPECTED_FPS * 2; totalDecodeNs = 0L; totalBytes = 0L
     }
@@ -181,7 +197,7 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
             (1f - nalFed.toFloat() / nalExpected).coerceIn(0f, 1f)
         } else 0f
         val avgDecodeMs = if (nalFed > 0) totalDecodeNs.toFloat() / nalFed / 1_000_000f else 0f
-        val bitrate = if (totalBytes > 0) totalBytes * 8 / 2 else 0L  // bits/s (2秒窗口)
+        val bitrate = if (totalBytes > 0) totalBytes * 8 / 2 else 0L
         val rtt = if (lastPingTs > 0) System.currentTimeMillis() - lastPingTs else 0L
         try {
             touchOut?.println("STATS %.3f %.1f %d %d".format(dropRatio, avgDecodeMs, bitrate, rtt))
@@ -195,7 +211,6 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
             "CONFIG" -> {
                 videoW = p.getOrNull(1)?.toIntOrNull() ?: 0
                 videoH = p.getOrNull(2)?.toIntOrNull() ?: 0
-                // 分辨率变了 → 重建解码器
                 scope.launch { withContext(Dispatchers.Main) { restartDecoder() } }
             }
             "PONG" -> {
@@ -225,7 +240,6 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
             var dec = decoder
             if (dec == null) {
-                // 等 SPS/PPS 齐了再起解码器
                 val type = if (nal.isNotEmpty()) nal[0].toInt() and 0x1F else 0
                 if (type == 7 || type == 8) csd0 += nal
                 if (csd0.size >= 2) {
@@ -236,7 +250,6 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
                 continue
             }
-            // 有解码器了，喂 NAL 并计时
             val t0 = System.nanoTime()
             feedNal(dec, nal)
             totalDecodeNs += System.nanoTime() - t0
@@ -245,16 +258,17 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun startDecoder(csd: List<ByteArray>) {
+        val surface = surfaceView?.holder?.surface ?: return
         try {
             val w = if (videoW > 0) videoW else 720
             val h = if (videoH > 0) videoH else 1280
             val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h)
             val dec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            dec.configure(fmt, binding.surface.holder.surface, null, 0)
+            dec.configure(fmt, surface, null, 0)
             dec.start()
             decoder = dec
             csd.forEach { feedNal(dec, it, config = true) }
-            runOnUiThread { binding.tvStatus.text = "画面来了 ${w}×${h}，点屏幕可反控" }
+            status = "画面来了 ${w}×${h}，点屏幕可反控"
         } catch (e: Exception) {
             toast("解码器起不来：${e.message}")
         }
@@ -263,7 +277,6 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private fun restartDecoder() {
         releaseDecoder()
         decoder = null
-        // 下次 pumpVideo 会通过 csd0 缓存自动重建
     }
 
     private fun feedNal(dec: MediaCodec?, nal: ByteArray, config: Boolean = false) {
@@ -293,11 +306,9 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
         decoder = null
     }
     private fun disconnectUI() {
-        connected = false; binding.tvStatus.text = "未连接"
+        connected = false; status = "未连接"
     }
-    private suspend fun setStatus(s: String) = withContext(Dispatchers.Main) {
-        binding.tvStatus.text = s
-    }
+    private suspend fun setStatus(s: String) = withContext(Dispatchers.Main) { status = s }
 
     override fun surfaceCreated(h: SurfaceHolder) {}
     override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {}

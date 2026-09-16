@@ -1,5 +1,8 @@
 <resources>
-    <style name="Theme.CarSender" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.CarSender" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">#3DDC84</item>
+        <item name="android:statusBarColor">#101418</item>
+        <item name="android:navigationBarColor">#101418</item>
+        <item name="android:windowBackground">#101418</item>
     </style>
 </resources>

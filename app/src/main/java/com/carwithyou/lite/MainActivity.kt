@@ -6,79 +6,96 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.widget.ArrayAdapter
 import android.widget.Toast
+import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
-import com.carwithyou.lite.databinding.ActivityMainBinding
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.carwithyou.lite.ui.HomeScreen
+import com.carwithyou.lite.ui.theme.CarWithYouTheme
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var binding: ActivityMainBinding
     private lateinit var store: SettingsStore
+    private var navPkgs by mutableStateOf(emptyList<String>())
+    private var musicPkgs by mutableStateOf(emptyList<String>())
+    private var navIndex by mutableIntStateOf(0)
+    private var musicIndex by mutableIntStateOf(0)
+    private var status by mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
         store = SettingsStore(this)
-        // 保活常驻 + 电池白名单（终版第4节，系统杀后台 countermeasure）
         try { ReceiverKeepService.start(this) } catch (_: Exception) {}
         try { ReceiverKeepService.requestWhitelist(this) } catch (_: Exception) {}
+        refreshApps()
+        status = statusText()
 
-        refreshSpinners()
-
-        binding.btnNav.setOnClickListener {
-            if (!SplitHelper.launch(this, store.navPkg)) toast("没找到导航 ${store.navPkg}，先在车机装高德车机版")
-        }
-        binding.btnMusic.setOnClickListener {
-            if (!SplitHelper.launch(this, store.musicPkg)) toast("没找到音乐 ${store.musicPkg}")
-        }
-        binding.btnSplit.setOnClickListener {
-            SplitHelper.launchSplit(this, store.navPkg, store.musicPkg)
-            toast("已发分屏指令：左导航右音乐（部分车机需手动再点一次分屏键）")
-        }
-        binding.btnLyric.setOnClickListener {
-            if (!LyricOverlayService.canDrawOverlays(this)) {
-                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-                toast("先给悬浮窗权限，再点一次")
-                return@setOnClickListener
+        setContent {
+            CarWithYouTheme {
+                HomeScreen(
+                    status = status,
+                    navPkgs = navPkgs,
+                    musicPkgs = musicPkgs,
+                    navIndex = navIndex,
+                    musicIndex = musicIndex,
+                    onNavIndex = { navIndex = it },
+                    onMusicIndex = { musicIndex = it },
+                    onOpenNav = {
+                        val pkg = selectedNav()
+                        if (!SplitHelper.launch(this, pkg)) toast("没找到导航 $pkg，先在车机装高德车机版")
+                    },
+                    onOpenMusic = {
+                        val pkg = selectedMusic()
+                        if (!SplitHelper.launch(this, pkg)) toast("没找到音乐 $pkg")
+                    },
+                    onSplit = {
+                        SplitHelper.launchSplit(this, selectedNav(), selectedMusic())
+                        toast("已发分屏指令：左导航右音乐（部分车机需手动再点一次分屏键）")
+                    },
+                    onSave = {
+                        store.navPkg = selectedNav()
+                        store.musicPkg = selectedMusic()
+                        toast("已保存：${store.navPkg} + ${store.musicPkg}")
+                    },
+                    onCast = { startActivity(Intent(this, StreamReceiverActivity::class.java)) },
+                    onLyricOn = {
+                        if (!LyricOverlayService.canDrawOverlays(this)) {
+                            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                            toast("先给悬浮窗权限，再点一次")
+                        } else {
+                            startService(Intent(this, LyricOverlayService::class.java))
+                            toast("悬浮歌词已开，播放音乐自动显示")
+                        }
+                    },
+                    onLyricOff = { stopService(Intent(this, LyricOverlayService::class.java)) },
+                    onNotif = {
+                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        toast("打开 CarWithYou歌词监听 的开关")
+                    }
+                )
             }
-            startService(Intent(this, LyricOverlayService::class.java))
-            toast("悬浮歌词已开，播放音乐自动显示")
         }
-        binding.btnLyricOff.setOnClickListener {
-            stopService(Intent(this, LyricOverlayService::class.java))
-        }
-        binding.btnNotif.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            toast("打开 CarWithYou歌词监听 的开关")
-        }
-        binding.btnSave.setOnClickListener {
-            store.navPkg = binding.spNav.selectedItem.toString()
-            store.musicPkg = binding.spMusic.selectedItem.toString()
-            toast("已保存：${store.navPkg} + ${store.musicPkg}")
-        }
-        binding.btnCast.setOnClickListener {
-            startActivity(Intent(this, StreamReceiverActivity::class.java))
-        }
-        binding.tvStatus.text = statusText()
     }
 
     override fun onResume() {
         super.onResume()
-        refreshSpinners()
-        binding.tvStatus.text = statusText()
+        refreshApps()
+        status = statusText()
     }
 
-    private fun refreshSpinners() {
-        val navs = (SplitHelper.installedNavPackages(packageManager) +
+    private fun selectedNav() = navPkgs.getOrNull(navIndex).orEmpty()
+    private fun selectedMusic() = musicPkgs.getOrNull(musicIndex).orEmpty()
+
+    private fun refreshApps() {
+        navPkgs = (SplitHelper.installedNavPackages(packageManager) +
             listOf(SplitHelper.AMAP_AUTO, SplitHelper.AMAP_PHONE)).distinct()
-        val musics = (SplitHelper.installedMusicPackages(packageManager) +
+        musicPkgs = (SplitHelper.installedMusicPackages(packageManager) +
             listOf(SplitHelper.QQ_MUSIC_CAR, SplitHelper.NETEASE, SplitHelper.KUGOU_CAR)).distinct()
-        binding.spNav.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, navs)
-        binding.spMusic.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, musics)
-        binding.spNav.setSelection(navs.indexOf(store.navPkg).coerceAtLeast(0))
-        binding.spMusic.setSelection(musics.indexOf(store.musicPkg).coerceAtLeast(0))
+        navIndex = navPkgs.indexOf(store.navPkg).coerceAtLeast(0)
+        musicIndex = musicPkgs.indexOf(store.musicPkg).coerceAtLeast(0)
     }
 
     private fun statusText(): String {

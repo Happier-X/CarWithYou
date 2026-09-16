@@ -1,6 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## 0.1.4
+### Added
+- 默认独立虚拟屏投车机：导航/音乐在副屏上跑，手机主屏可继续使用
+- 车机桌面、悬浮切换栏；触摸回传打到虚拟屏 displayId
+
+### Changed
+- 虚拟屏锁定分辨率，只自适应码率，避免重建 Display 杀掉车上的 App
+- 镜像模式仍作为 ROM 不支持副屏时的兜底
+- UI 迁到 Jetpack Compose + MIUIX 0.9.3（`miuix-ui` / `miuix-preference`）；投屏解码仍用 SurfaceView
+- 工具链：Kotlin 2.4.0、AGP 9.2.1、Gradle 9.6.1、Compose BOM 2026.09.00、compileSdk 37、JDK 21
 
 ## 0.1.3
 ### Fixed

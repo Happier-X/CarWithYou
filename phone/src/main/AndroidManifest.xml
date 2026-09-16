@@ -5,18 +5,41 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <uses-feature android:name="android.software.activities_on_secondary_displays" android:required="false" />
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+
+    <queries>
+        <package android:name="com.autonavi.minimap" />
+        <package android:name="com.autonavi.amapauto" />
+        <package android:name="com.baidu.BaiduMap" />
+        <package android:name="com.tencent.qqmusic" />
+        <package android:name="com.netease.cloudmusic" />
+        <package android:name="com.kugou.android" />
+        <package android:name="cn.kuwo.player" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"
         android:icon="@android:mipmap/sym_def_app_icon"
         android:label="Car投屏-手机端"
+        android:resizeableActivity="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.CarSender">
 
         <activity
             android:name=".SenderActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -24,10 +47,22 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".CarDesktopActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:resizeableActivity="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:taskAffinity=".carDisplay"
+            android:theme="@style/Theme.CarSender" />
+
         <service
             android:name=".ScreenCastService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="mediaProjection|dataSync" />
 
         <service
             android:name=".TouchInjectorService"

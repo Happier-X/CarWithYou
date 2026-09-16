@@ -1,5 +1,7 @@
 package com.carwithyou.sender
 
+import android.view.Display
+
 /** 手机端共享常量 + 自适应分级。改值前先改 docs/PROTOCOL.md */
 object CastConfig {
     const val VIDEO_PORT = 8888
@@ -7,6 +9,7 @@ object CastConfig {
     const val FPS = 30
     const val IFRAME_INTERVAL = 1 // 秒
     const val HB_INTERVAL_MS = 5_000L
+    const val VIRTUAL_DPI = 240
 
     // ── 分辨率档位（短边） ───────────────────────────
     val RES_TIERS = intArrayOf(480, 720, 1080)
@@ -25,10 +28,12 @@ object CastConfig {
 
     // ── 运行时状态（线程安全，主推流线程+控制线程共享） ──
     @Volatile var adaptiveEnabled = true   // UI 开关
+    @Volatile var resolutionLocked = false // 虚拟屏不允许重建 Display
     @Volatile var videoW = 0               // 当前编码宽
     @Volatile var videoH = 0               // 当前编码高
-    @Volatile var screenW = 0              // 手机物理屏宽
-    @Volatile var screenH = 0              // 手机物理屏高
+    @Volatile var screenW = 0              // 触摸坐标系宽（虚拟屏=虚拟分辨率，镜像=物理屏）
+    @Volatile var screenH = 0              // 触摸坐标系高
+    @Volatile var displayId = Display.DEFAULT_DISPLAY  // 注入目标 Display
     @Volatile var currentBitrate = 2_000_000
     @Volatile var currentResShort = 720
 
@@ -50,19 +55,18 @@ object CastConfig {
         return when {
             // 丢帧 > 10% 或解码 > 30fps 一帧时间的 1.5 倍 → 降档
             drop > 0.10f || decMs > (1000f / FPS * 1.5f) -> {
-                if (currentResShort > RES_TIERS.first()) -1 else {
-                    // 已经最低档了，只能降码率
+                if (!resolutionLocked && currentResShort > RES_TIERS.first()) -1 else {
                     val newB = (currentBitrate * 0.7f).toInt().coerceAtLeast(minB)
-                    if (newB < currentBitrate) { currentBitrate = newB; 0 } else -1
+                    if (newB < currentBitrate) { currentBitrate = newB; 0 } else 0
                 }
             }
             // 丢帧 < 2% 且有余量 → 尝试升码率/分辨率
             drop < 0.02f && lastLatencyMs < 80 -> {
                 if (currentBitrate < maxB) {
                     currentBitrate = (currentBitrate * 1.2f).toInt().coerceAtMost(maxB)
-                    0 // 码率变了，返回0=只调码率
-                } else if (currentResShort < RES_TIERS.last()) {
-                    1 // 码率已满档，升分辨率
+                    0
+                } else if (!resolutionLocked && currentResShort < RES_TIERS.last()) {
+                    1
                 } else 0
             }
             // 丢帧 2%~10% → 维持
