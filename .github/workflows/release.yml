@@ -158,17 +158,30 @@ jobs:
           from pathlib import Path
           import os
           ver = os.environ["GITHUB_REF_NAME"].lstrip("v")
-          out = []
-          printing = False
-          for line in Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines():
-              if line.startswith("## "):
+          lines = Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+
+          def section(*names):
+              wanted = {n.lstrip("v").lower() for n in names}
+              out, printing = [], False
+              for line in lines:
+                  if line.startswith("## "):
+                      if printing:
+                          break
+                      heading = line[3:].strip().strip("[]").lstrip("v").lower()
+                      printing = heading in wanted
                   if printing:
-                      break
-                  heading = line[3:].strip().strip("[]").lstrip("v")
-                  printing = heading == ver
-              if printing:
-                  out.append(line)
-          notes = "\n".join(out).strip() or f"Release {ver}"
+                      out.append(line)
+              return "\n".join(out).strip()
+
+          notes = section(ver)
+          if not notes:
+              # 打 tag 前忘了把 `## Unreleased` 改成 `## X.Y.Z` 时，别发个空的 Release 说明
+              notes = section("Unreleased")
+              if notes:
+                  print(f"No '## {ver}' section in CHANGELOG; using '## Unreleased'")
+          if not notes:
+              notes = f"Release {ver}"
+              print(f"No '## {ver}' or '## Unreleased' section in CHANGELOG; using placeholder")
           Path("release_notes.md").write_text(notes + "\n", encoding="utf-8")
           print(notes)
           PY
