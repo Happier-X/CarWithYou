@@ -11,6 +11,10 @@
 - UI 迁到 Jetpack Compose + MIUIX 0.9.3（`miuix-ui` / `miuix-preference`）；投屏解码仍用 SurfaceView
 - 工具链：Kotlin 2.4.0、AGP 9.2.1、Gradle 9.6.1、Compose BOM 2026.09.00、compileSdk 37、JDK 21
 
+### Fixed
+- 触摸回传在 API 34+ 用公开 `setDisplayId`，不再反射私有字段，release lint 可通过
+- 换成 Gradle 9 官方 wrapper，CI 多行参数不再被拆掉
+
 ## 0.1.3
 ### Fixed
 - GitHub Release 使用独立的 CarWithYou 签名钥，上传正式签名 APK

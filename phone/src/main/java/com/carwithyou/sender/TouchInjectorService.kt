@@ -67,16 +67,12 @@ class TouchInjectorService : AccessibilityService() {
     private fun applyDisplayId(builder: GestureDescription.Builder) {
         val displayId = CastConfig.displayId
         if (displayId == Display.DEFAULT_DISPLAY || displayId == Display.INVALID_DISPLAY) return
+        // API 34+ has GestureDescription.Builder.setDisplayId. Older phones stay on the
+        // default display: reflecting mDisplayId is a blocked private API at targetSdk 35.
         if (Build.VERSION.SDK_INT >= 34) {
             builder.setDisplayId(displayId)
-            return
-        }
-        try {
-            val f = GestureDescription.Builder::class.java.getDeclaredField("mDisplayId")
-            f.isAccessible = true
-            f.setInt(builder, displayId)
-        } catch (e: Exception) {
-            Log.w(TAG, "cannot set gesture displayId=$displayId: ${e.message}")
+        } else {
+            Log.w(TAG, "gesture displayId=$displayId needs API 34+, injecting on default display")
         }
     }
 
