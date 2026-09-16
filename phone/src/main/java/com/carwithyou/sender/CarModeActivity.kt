@@ -115,6 +115,14 @@ class CarModeActivity : AppCompatActivity() {
                         }
                         Spacer(Modifier.height(12.dp))
                         Row {
+                            BigBtn("导航", Modifier.weight(1f)) { openApp(navPkg(), "高德装了吗") }
+                            Spacer(Modifier.width(12.dp))
+                            BigBtn("音乐", Modifier.weight(1f)) { openApp(musicPkg(), "音乐装了吗") }
+                            Spacer(Modifier.width(12.dp))
+                            BigBtn("电话", Modifier.weight(1f)) { openDialer() }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Row {
                             BigBtn(
                                 if (dnd) "关免打扰" else "开免打扰",
                                 Modifier.weight(1f)
@@ -125,6 +133,54 @@ class CarModeActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+    }
+
+    private fun navPkg(): String {
+        return try { SenderPrefs(this).navPkg } catch (_: Exception) { KnownApps.AMAP }
+    }
+
+    private fun musicPkg(): String {
+        return try { SenderPrefs(this).musicPkg } catch (_: Exception) { KnownApps.QQ_MUSIC }
+    }
+
+    /** 普通启动（主屏，零特殊权限），镜像画面同步跟过去 */
+    private fun openApp(pkg: String, missingHint: String) {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage(pkg)
+            if (intent == null) {
+                Toast.makeText(this, missingHint, Toast.LENGTH_LONG).show()
+                return
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (e: Exception) {
+            AppLog.w(TAG, "驾驶舱打开 $pkg 失败：${e.message}")
+        }
+    }
+
+    private fun openDialer() {
+        val cands = listOf(
+            "com.google.android.dialer",
+            "com.android.dialer",
+            "com.samsung.android.dialer",
+            "com.huawei.contacts",
+            "com.miui.contacts"
+        )
+        for (pkg in cands) {
+            try {
+                val intent = packageManager.getLaunchIntentForPackage(pkg)
+                if (intent != null) {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    return
+                }
+            } catch (_: Exception) {}
+        }
+        try {
+            startActivity(Intent(Intent.ACTION_DIAL).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            Toast.makeText(this, "拨号盘打不开", Toast.LENGTH_LONG).show()
         }
     }
 

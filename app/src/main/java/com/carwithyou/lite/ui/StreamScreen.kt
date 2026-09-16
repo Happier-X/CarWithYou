@@ -100,6 +100,7 @@ fun StreamScreen(
             DockKey("导航") { onAppCmd("nav") }
             DockKey("音乐") { onAppCmd("music") }
             DockKey("分屏") { onAppCmd("split") }
+            DockKey("返回") { onAppCmd("back") }
         }
         // 右下角小按钮：复制日志（连不上/黑屏时用）
         TextButton(

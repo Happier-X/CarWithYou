@@ -77,6 +77,18 @@ class TouchInjectorService : AccessibilityService() {
         }
     }
 
+    /** CarPlay 返回键：车机 Dock“返回”发 KEY back 到这里（虚拟/镜像通用） */
+    fun back(): Boolean {
+        return try {
+            val ok = performGlobalAction(GLOBAL_ACTION_BACK)
+            if (!ok) AppLog.wThrottle(TAG, "返回键没吃进去（焦点不在应用上？）", 5_000)
+            ok
+        } catch (e: Exception) {
+            AppLog.wThrottle(TAG, "返回键失败：${e.message}", 5_000)
+            false
+        }
+    }
+
     fun dispatchGestureSafe(g: GestureDescription) {
         try {
             val ok = dispatchGesture(g, null, null)

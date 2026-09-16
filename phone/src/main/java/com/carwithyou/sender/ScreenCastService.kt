@@ -73,6 +73,7 @@ class ScreenCastService : Service() {
         @Volatile var running = false
         @Volatile var virtualMode = true
         @Volatile var browserMode = false
+        @Volatile var displayDenied = false // 系统拒往虚拟屏放 Activity（部分机型）→ 已降级镜像
         @Volatile var lastHint = ""
         @Volatile var browserUrl = ""
     }
@@ -91,6 +92,17 @@ class ScreenCastService : Service() {
     private var overlay: CarControlOverlay? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var projectionCallback: MediaProjection.Callback? = null
+    // 编码器 outputFormat 里抠出的 SPS/PPS（部分软编码流里不带，新客户端先发这对）
+    @Volatile private var csdCache: ByteArray? = null
+    @Volatile private var csdCache1: ByteArray? = null
+    // live 流里嗅到的第一对 SPS/PPS（outputFormat 没有时的保底）
+    @Volatile private var sniffedSps: ByteArray? = null
+    @Volatile private var sniffedPps: ByteArray? = null
+    /**
+     * 通用 Baseline PPS（部分软编码实例流里永远不出现 PPS，不补这 4 字节解码器永不起）。
+     * sps_id=0 的标准 Baseline 默认值，与真实 SPS 配对可解；只在嗅不到真 PPS 时用。
+     */
+    private val GENERIC_PPS = byteArrayOf(0x68.toByte(), 0xCE.toByte(), 0x38.toByte(), 0x80.toByte())
 
     private var resultCode = 0
     private var projectionData: Intent? = null
@@ -195,6 +207,7 @@ class ScreenCastService : Service() {
 
     private fun startCast() {
         running = true
+        displayDenied = false
         lastHint = ""
         acquireWakeLock()
         if (debugSave) {
@@ -283,10 +296,10 @@ class ScreenCastService : Service() {
     /**
      * 虚拟屏只建一次，断线重连不重建，避免车上的 App 被杀掉。
      *
-     * Display 归属决定生死：MediaProjection 建的屏，AMS 不让 App 用
-     * launchDisplayId 往上放 Activity（Permission Denial），屏就永远是黑的，
-     * 车机看着就是“连接不上”。所以优先 DisplayManager 建屏（App 自己的屏，
-     * 可放 Activity），建不出来才回落 MediaProjection（部分 ROM 限制副屏）。
+     * 机型无关的保底：点投屏后先试虚拟屏，系统拒绝往上放 Activity
+     * （Permission Denial，部分机型必现）就当场降级 CarPlay 镜像——
+     * 同一次录屏授权，不用用户重点，手机自动弹驾驶舱桌面。
+     * 所以黑屏/连不上不再靠机型碰运气，任何手机都有路可走。
      */
     private suspend fun runVirtualSession() {
         val res = virtualRes(CastConfig.currentResShort)
@@ -294,54 +307,101 @@ class ScreenCastService : Service() {
         CastConfig.videoH = res.h
         CastConfig.screenW = res.w
         CastConfig.screenH = res.h
+        // projection 只拿一次（单次 token，拿两次抛 SecurityException）。
+        // DisplayManager 建屏不消耗它，降级镜像时复用同一个。
+        var proj: MediaProjection? = null
+        if (projectionData != null && resultCode == Activity.RESULT_OK) {
+            startFg(withProjection = true)
+            proj = obtainProjection()
+        }
         val (enc, surface) = createEncoder(res.w, res.h, CastConfig.currentBitrate)
         encoder = enc
         encoderSurface = surface
-        // 有录屏授权时优先 MediaProjection + PUBLIC，第三方 App 才能落到副屏（CarPlus 同款）。
-        // DisplayManager 无 PUBLIC 时高德/音乐会弹回手机，只作无授权兜底。
-        // 注：顺序反过来了——先试 DisplayManager（自己的屏，Activity 放得上去），
-        // 建不出/放不上去再走 MediaProjection。见 runVirtualSession 头注释。
+        // 先试 DisplayManager（自己的屏，Activity 有机会放上去）。
+        // 建不出再走 MediaProjection（部分 ROM 限制副屏）。
         vdisplay = createIndependentDisplay(res.w, res.h, surface)
-        if (vdisplay == null) {
-            val haveProjection = projectionData != null && resultCode == Activity.RESULT_OK
-            if (haveProjection) {
-                try {
-                    startFg(withProjection = true)
-                    val proj = obtainProjection() ?: run {
-                        sendBroadcast(Intent(ACTION_NEED_PROJECTION).setPackage(packageName))
-                        stopSelf()
-                        return
-                    }
-                    vdisplay = createProjectionDisplay(proj, res.w, res.h, surface)
-                } catch (e: Exception) {
-                    AppLog.w(TAG, "MediaProjection 建屏也失败：${e.message}")
-                }
+        if (vdisplay == null && proj != null) {
+            try {
+                vdisplay = createProjectionDisplay(proj, res.w, res.h, surface)
+            } catch (e: Exception) {
+                AppLog.w(TAG, "MediaProjection 建屏也失败：${e.message}")
             }
         }
-        if (vdisplay == null) {
-            lastHint = "虚拟屏建不出来（独立副屏被拒），改镜像模式试试"
-            AppLog.e(TAG, lastHint)
+        if (vdisplay != null) {
+            val displayId = vdisplay?.display?.displayId ?: Display.INVALID_DISPLAY
+            CastConfig.displayId = displayId
+            AppLog.i(TAG, "virtual display id=$displayId ${res.w}x${res.h} dpi=$densityDpi")
+            sendConfig(res.w, res.h)
+            delay(400)
+            // 同步试放桌面：被拒（SecurityException）= 此机不支持虚拟屏，直接降级
+            if (tryDesktop(displayId)) {
+                sendBroadcast(Intent(ACTION_VIRTUAL_READY).setPackage(packageName))
+                mainHandler.postDelayed({ showOverlay() }, 800)
+                mainHandler.postDelayed({
+                    if (CarDesktopActivity.instance == null) {
+                        lastHint = "系统没把桌面放到副屏，已直接拉起导航/音乐。若它们出现在手机上，请改用镜像模式。"
+                        launchAppsOntoVirtual()
+                    }
+                }, 1600)
+                while (scope.isActive && running) {
+                    pumpWithAdapt(enc, CastConfig.currentResShort, allowResize = false)
+                }
+                return
+            }
+            AppLog.w(TAG, "虚拟屏放不进 Activity，自动降级 CarPlay 镜像")
+        }
+        runMirrorFallback(proj, "此手机不支持独立虚拟屏，已自动切 CarPlay 镜像（驾驶舱在手机上）")
+    }
+
+    /** 同步放桌面，返回放没放上去（拒了就降级，不让用户看黑屏） */
+    private fun tryDesktop(displayId: Int): Boolean {
+        return try {
+            startCarDesktop(displayId)
+        } catch (e: SecurityException) {
+            AppLog.w(TAG, "放桌面被系统拒绝：${e.message}")
+            false
+        } catch (e: Exception) {
+            AppLog.w(TAG, "放桌面失败：${e.message}")
+            false
+        }
+    }
+
+    /** CarPlay 式降级：镜像主屏 + 手机弹驾驶舱桌面，车机 Dock 照用（主屏切应用） */
+    private suspend fun runMirrorFallback(proj: MediaProjection?, reason: String) {
+        lastHint = reason
+        AppLog.i(TAG, reason)
+        displayDenied = true
+        virtualMode = false
+        releaseEncoderAndDisplay()
+        try { overlay?.hide() } catch (_: Exception) {}
+        overlay = null
+        if (proj == null) {
+            lastHint = "需要一次录屏授权（录的是投屏画面）"
             sendBroadcast(Intent(ACTION_NEED_PROJECTION).setPackage(packageName))
             stopSelf()
             return
         }
-        val displayId = vdisplay?.display?.displayId ?: Display.INVALID_DISPLAY
-        CastConfig.displayId = displayId
-        AppLog.i(TAG, "virtual display id=$displayId ${res.w}x${res.h} dpi=$densityDpi")
-        sendConfig(res.w, res.h)
-        delay(400)
-        mainHandler.post { startCarDesktop(displayId) }
+        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        val dm = DisplayMetrics()
+        @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(dm)
+        densityDpi = dm.densityDpi
+        CastConfig.screenW = dm.widthPixels
+        CastConfig.screenH = dm.heightPixels
+        CastConfig.displayId = Display.DEFAULT_DISPLAY
+        openCarHome()
         sendBroadcast(Intent(ACTION_VIRTUAL_READY).setPackage(packageName))
-        mainHandler.postDelayed({ showOverlay() }, 800)
-        mainHandler.postDelayed({
-            if (CarDesktopActivity.instance == null) {
-                lastHint = "系统没把桌面放到副屏，已直接拉起导航/音乐。若它们出现在手机上，请改用镜像模式。"
-                launchAppsOntoVirtual()
-            }
-        }, 1600)
+        runMirrorSession(proj, dm.densityDpi)
+    }
 
-        while (scope.isActive && running) {
-            pumpWithAdapt(enc, CastConfig.currentResShort, allowResize = false)
+    /** 驾驶舱桌面（手机主屏，普通启动，不挑 Display，台台能开） */
+    private fun openCarHome() {
+        try {
+            startActivity(Intent(this, CarModeActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            })
+        } catch (e: Exception) {
+            lastHint = "驾驶舱打不开：${e.message}"
+            AppLog.w(TAG, lastHint)
         }
     }
 
@@ -528,8 +588,8 @@ class ScreenCastService : Service() {
         throw last ?: IllegalStateException("createVirtualDisplay failed")
     }
 
-    private fun startCarDesktop(displayId: Int) {
-        if (displayId == Display.INVALID_DISPLAY) return
+    private fun startCarDesktop(displayId: Int): Boolean {
+        if (displayId == Display.INVALID_DISPLAY) return false
         val intent = Intent(this, CarDesktopActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
             putExtra(CarDesktopActivity.EXTRA_NAV, navPkg)
@@ -539,11 +599,13 @@ class ScreenCastService : Service() {
         }
         val opts = android.app.ActivityOptions.makeBasic()
         opts.launchDisplayId = displayId
-        try {
+        return try {
             startActivity(intent, opts.toBundle())
+            true
         } catch (e: Exception) {
             AppLog.w(TAG, "start CarDesktop failed: ${e.message}")
             lastHint = "虚拟桌面启动失败：${e.message}"
+            false
         }
     }
 
@@ -615,6 +677,22 @@ class ScreenCastService : Service() {
                 }
                 val surface = enc.createInputSurface()
                 enc.start()
+                // 部分编码器（软编常见）码流里不带 SPS/PPS：从 outputFormat 抠 csd-0/csd-1，
+                // 新客户端连上先发这对，再推 live 流，否则车机永远等不到 csd prosecuted 也黑屏。
+                try {
+                    val of = enc.outputFormat
+                    if (of.containsKey("csd-0")) {
+                        val bb = of.getByteBuffer("csd-0")
+                        csdCache = bb?.let { b -> ByteArray(b.remaining()).also { b.get(it) } }
+                    }
+                    if (of.containsKey("csd-1")) {
+                        val bb = of.getByteBuffer("csd-1")
+                        csdCache1 = bb?.let { b -> ByteArray(b.remaining()).also { b.get(it) } }
+                    }
+                    AppLog.i(TAG, "编码器 csd：sps=${csdCache?.size ?: 0}B pps=${csdCache1?.size ?: 0}B")
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "取编码器 csd 失败：${e.message}")
+                }
                 AppLog.i(TAG, "编码器已起[v$variant]：${enc.name} ${w}x${h} @%.1fM ${CastConfig.FPS}fps".format(bitrate / 1_000_000f))
                 return enc to surface
             } catch (e: Exception) {
@@ -624,6 +702,45 @@ class ScreenCastService : Service() {
         }
         lastHint = "手机编码器起不来（三档配置都被拒），换镜像模式或重启手机再试"
         throw lastErr ?: IllegalStateException("createEncoder failed")
+    }
+
+    /** 从输出 NAL 里嗅探 SPS/PPS，各存第一对（够新客户端起解码） */
+    private fun sniffCsd(data: ByteArray) {
+        val t = avcType(data)
+        if (t != 7 && t != 8) return
+        if (data.size > 256) return // csd 就几十字节，太大不是它
+        try {
+            if (t == 7 && sniffedSps == null) {
+                sniffedSps = data.copyOf()
+                AppLog.i(TAG, "嗅到 SPS ${data.size}B")
+            } else if (t == 8 && sniffedPps == null) {
+                sniffedPps = data.copyOf()
+                AppLog.i(TAG, "嗅到 PPS ${data.size}B")
+            }
+        } catch (_: Exception) {}
+    }
+
+    /** NAL 类型：Annex-B（跳起始码）/裸/AVCC 都认 */
+    private fun avcType(nal: ByteArray): Int {
+        if (nal.isEmpty()) return 0
+        var off = 0
+        if (nal.size >= 4 && nal[0] == 0.toByte() && nal[1] == 0.toByte() &&
+            nal[2] == 0.toByte() && nal[3] == 1.toByte()
+        ) {
+            off = 4
+        } else if (nal.size >= 3 && nal[0] == 0.toByte() && nal[1] == 0.toByte() &&
+            nal[2] == 1.toByte()
+        ) {
+            off = 3
+        } else if (nal.size >= 5) {
+            val len = ((nal[0].toInt() and 0xFF) shl 24) or
+                ((nal[1].toInt() and 0xFF) shl 16) or
+                ((nal[2].toInt() and 0xFF) shl 8) or
+                (nal[3].toInt() and 0xFF)
+            if (len == nal.size - 4) off = 4
+        }
+        if (off >= nal.size) return 0
+        return nal[off].toInt() and 0x1F
     }
 
     private fun sendConfig(w: Int, h: Int) {
@@ -648,13 +765,50 @@ class ScreenCastService : Service() {
         try {
             val client = videoServer?.accept() ?: return false
             AppLog.i(TAG, "车机连上视频端口 $VIDEO_PORT")
+            // 新车机连上立刻请一帧 SPS/PPS+IDR，不然它只能收到 P 帧，
+            // 解码器等不到 csd 就永远黑屏——看着就是“连接不上”，跟机型无关。
+            try {
+                enc.setParameters(android.os.Bundle().apply {
+                    putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                })
+            } catch (e: Exception) {
+                AppLog.wThrottle(TAG, "请关键帧失败：${e.message}", 10_000)
+            }
+            // 先发缓存的 SPS/PPS（码流里没有时全靠这对起解码器），再推 live 流。
+            // PPS 嗅不到就用通用 Baseline 默认（有真 SPS 才发，否则跳过）。
+            val sps = csdCache ?: sniffedSps
+            var pps = csdCache1 ?: sniffedPps
+            var ppsGeneric = false
+            if (sps != null && pps == null) {
+                pps = GENERIC_PPS
+                ppsGeneric = true
+            }
             client.use { sock ->
+                sock.soTimeout = 30_000
                 val out = DataOutputStream(sock.getOutputStream())
+                if (sps != null && pps != null) {
+                    try {
+                        out.writeInt(sps.size); out.write(sps); out.flush()
+                        out.writeInt(pps.size); out.write(pps); out.flush()
+                        AppLog.i(TAG, "已发 csd（sps=${sps.size}B pps=${pps.size}B${if (ppsGeneric) "[通用]" else ""}），车机应秒出画面")
+                    } catch (e: Exception) {
+                        AppLog.w(TAG, "发 csd 失败：${e.message}")
+                        return false
+                    }
+                }
                 val info = MediaCodec.BufferInfo()
                 var frames = 0L
                 var bytes = 0L
                 var lastLogAt = 0L
+                val typeCount = LongArray(32)
+                val acceptAt = System.currentTimeMillis()
                 while (scope.isActive && running && !needResize) {
+                    // 控制通道是视频的心跳：车机先连 8889 再连 8888；控制断了视频必死，
+                    // 半开连接写不报错时会永远喂黑洞。控制 10 秒没影就掐掉等下一个。
+                    if (controlOut == null && System.currentTimeMillis() - acceptAt > 10_000) {
+                        AppLog.w(TAG, "视频连上 10 秒了控制还没来，掐掉等车机重连")
+                        break
+                    }
                     val idx = enc.dequeueOutputBuffer(info, 10_000)
                     if (idx >= 0) {
                         val buf = enc.getOutputBuffer(idx) ?: continue
@@ -665,6 +819,10 @@ class ScreenCastService : Service() {
                         if (info.size > 0) {
                             frames++
                             bytes += data.size
+                            try { typeCount[avcType(data)]++ } catch (_: Exception) {}
+                            // 从 live 流里嗅探第一对 SPS/PPS（Annex-B/裸/AVCC 都认），
+                            // 给后来连的车机用：没有这对它们永远起不来解码器。
+                            if (sniffedSps == null || sniffedPps == null) sniffCsd(data)
                             try {
                                 out.writeInt(data.size)
                                 out.write(data)
@@ -683,7 +841,9 @@ class ScreenCastService : Service() {
                         val logNow = System.currentTimeMillis()
                         if (logNow - lastLogAt >= 5000) {
                             lastLogAt = logNow
-                            AppLog.i(TAG, "推流中 frames=$frames ${bytes / 1024}KB idx=$idx")
+                            val dist = typeCount.mapIndexed { i, c -> if (c > 0) "$i=$c" else null }
+                                .filterNotNull().joinToString(",")
+                            AppLog.i(TAG, "推流中 frames=$frames ${bytes / 1024}KB idx=$idx types[$dist]")
                         }
                         val now = System.currentTimeMillis()
                         if (now - lastDecideAt < 2000) continue
@@ -806,6 +966,16 @@ class ScreenCastService : Service() {
                 CastConfig.lastLatencyMs = p.getOrNull(4)?.toLongOrNull() ?: 0L
             }
             "PING" -> try { controlOut?.println("PONG ${p.getOrNull(1) ?: ""}"); controlOut?.flush() } catch (_: Exception) {}
+            "KEY" -> {
+                // 车机 Dock 返回键（虚拟/镜像通用，走无障碍全局返回）
+                if (p.getOrNull(1) == "back") {
+                    val svc = TouchInjectorService.instance
+                    if (svc == null) {
+                        lastHint = "没开无障碍，返回键用不了"
+                        AppLog.wThrottle(TAG, lastHint, 10_000)
+                    } else svc.back()
+                }
+            }
             "APP" -> {
                 // 车机左 Dock 发回来的切应用命令（CarPlay 式）：home/nav/music/split
                 val cmd = p.getOrNull(1)?.lowercase().orEmpty()
@@ -835,10 +1005,10 @@ class ScreenCastService : Service() {
         }
     }
 
-    /** 车机 Dock 切虚拟屏应用（CarPlay 式主屏切换），只在虚拟屏模式下有效 */
+    /** 车机 Dock 切应用。虚拟屏正常时切副屏；降级/镜像时直接切手机主屏（镜像同步跟过去，台台可用） */
     private fun switchVirtualApp(cmd: String) {
-        if (!virtualMode) {
-            lastHint = "镜像模式不支持车机Dock切换"
+        if (displayDenied || !virtualMode) {
+            switchMainDisplayApp(cmd)
             return
         }
         val id = CastConfig.displayId
@@ -861,6 +1031,24 @@ class ScreenCastService : Service() {
             else -> return
         }
         AppLog.i(TAG, "车机Dock切应用：$cmd")
+    }
+
+    private fun switchMainDisplayApp(cmd: String) {
+        when (cmd) {
+            "home" -> openCarHome()
+            "nav" -> if (!AppLauncher.launch(this, navPkg, Display.DEFAULT_DISPLAY)) {
+                lastHint = "导航打不开（$navPkg 装了吗）"
+            }
+            "music" -> if (!AppLauncher.launch(this, musicPkg, Display.DEFAULT_DISPLAY)) {
+                lastHint = "音乐打不开（$musicPkg 装了吗）"
+            }
+            "split" -> {
+                AppLauncher.launch(this, navPkg, Display.DEFAULT_DISPLAY)
+                lastHint = "主屏分屏请手动点分屏键，导航已打开"
+            }
+            else -> return
+        }
+        AppLog.i(TAG, "车机Dock切主屏应用：$cmd")
     }
 
     private fun acquireWakeLock() {
@@ -891,6 +1079,8 @@ class ScreenCastService : Service() {
         encoderSurface = null
         try { imageReader?.close() } catch (_: Exception) {}
         imageReader = null
+        // 编码器换了，旧 SPS/PPS 作废（分辨率可能变了）
+        csdCache = null; csdCache1 = null; sniffedSps = null; sniffedPps = null
     }
 
     override fun onDestroy() {

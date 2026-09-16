@@ -291,6 +291,7 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private suspend fun pumpVideo(s: Socket) {
         val `in` = DataInputStream(s.getInputStream())
         val csd0 = mutableListOf<ByteArray>()
+        var nals = 0
         while (scope.isActive && wantConnect && connected) {
             val len = try {
                 `in`.readInt()
@@ -306,10 +307,14 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
             val nal = ByteArray(len)
             `in`.readFully(nal)
             totalBytes += len + 4
+            if (decoder == null && nals < 3) {
+                AppLog.i(TAG, "收流首包#$nals len=$len head=${nal.take(8).joinToString("") { "%02x".format(it) }}")
+            }
+            nals++
 
             var dec = decoder
             if (dec == null) {
-                val type = if (nal.isNotEmpty()) nal[0].toInt() and 0x1F else 0
+                val type = nalType(nal)
                 if (type == 7 || type == 8) csd0 += nal
                 if (csd0.size >= 2) {
                     withContext(Dispatchers.Main) { startDecoder(csd0) }
@@ -328,6 +333,34 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
             totalDecodeNs += System.nanoTime() - t0
             nalFed++
         }
+    }
+
+    /**
+     * 取 NAL 类型，兼容三种封装（不同手机编码器输出不一样，跟机型无关都要认）：
+     * Annex-B（00 00 00 01 xx / 00 00 01 xx）、裸 NAL（首字节即头）、AVCC（4 字节长度前缀）。
+     * 之前只认首字节，Annex-B 流的 0x00 被当成 type 0，解码器永远起不来——黑屏即“连不上”。
+     */
+    private fun nalType(nal: ByteArray): Int {
+        if (nal.isEmpty()) return 0
+        var off = 0
+        if (nal.size >= 4 && nal[0] == 0.toByte() && nal[1] == 0.toByte() &&
+            nal[2] == 0.toByte() && nal[3] == 1.toByte()
+        ) {
+            off = 4
+        } else if (nal.size >= 3 && nal[0] == 0.toByte() && nal[1] == 0.toByte() &&
+            nal[2] == 1.toByte()
+        ) {
+            off = 3
+        } else if (nal.size >= 5) {
+            // AVCC：前 4 字节是大端长度，长度对得上就是它
+            val len = ((nal[0].toInt() and 0xFF) shl 24) or
+                ((nal[1].toInt() and 0xFF) shl 16) or
+                ((nal[2].toInt() and 0xFF) shl 8) or
+                (nal[3].toInt() and 0xFF)
+            if (len == nal.size - 4) off = 4
+        }
+        if (off >= nal.size) return 0
+        return nal[off].toInt() and 0x1F
     }
 
     private fun startDecoder(csd: List<ByteArray>) {
@@ -395,13 +428,13 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
         wantConnect = false; loopJob?.cancel(); disconnectUI()
     }
 
-    /** 左 Dock 发回手机切虚拟屏应用（CarPlay 式），走 8889 控制通道 */
+    /** 左 Dock 发回手机切应用（CarPlay 式），走 8889 控制通道；返回键走 KEY */
     private fun sendApp(cmd: String) {
         scope.launch {
             try {
-                touchOut?.println("APP $cmd")
+                touchOut?.println(if (cmd == "back") "KEY back" else "APP $cmd")
                 touchOut?.flush()
-                AppLog.i(TAG, "Dock切应用：$cmd")
+                AppLog.i(TAG, "Dock命令：$cmd")
             } catch (e: Exception) {
                 AppLog.wThrottle(TAG, "Dock命令发不出去：${e.message}", 5_000)
             }

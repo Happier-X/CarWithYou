@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+### Added
+- 机型无关的自动降级：虚拟屏放不进 Activity（部分机型 Permission Denial）就当场切 CarPlay 镜像，同一次录屏授权、手机自动弹驾驶舱桌面，不再黑屏
+- 黑屏根因修复（后连车机永远等不到 SPS/PPS）：新客户端连上先发 SPS/PPS（outputFormat → live 流嗅探 → 通用 Baseline 保底三级取），再请一帧关键帧；车机 NAL 类型检测兼容 Annex-B/裸/AVCC 三种封装
+- 视频通道绑定控制通道：视频连上 10 秒控制还没来（半开连接）就掐掉重等，不再给黑洞喂流占着坑
+- 车机 Dock 返回键（`KEY back`，无障碍全局返回）与驾驶舱应用直达键（导航/音乐/电话，镜像下直接切手机主屏）
 ### Fixed
 - 连不上/连上即断三连修：编码器三档降级（部分机型拒 Baseline + 低延迟组合，之前直接“启动失败”杀服务）；自适应决策锁 2 秒一次（之前每帧调，码率瞬间顶满并误触发分辨率切换）；镜像/虚拟屏都不再重建 Display（同个 MediaProjection 二次建屏抛 SecurityException 直接杀服务）
 - 虚拟屏优先 DisplayManager 建屏：MediaProjection 建的屏在部分系统上不让 App 放 Activity（Permission Denial → 黑屏看着像连不上），建不出才回落录屏路径
