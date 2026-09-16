@@ -152,6 +152,27 @@ jobs:
             exit 1
           fi
 
+      - name: Extract this version from CHANGELOG
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          ver = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          out = []
+          printing = False
+          for line in Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines():
+              if line.startswith("## "):
+                  if printing:
+                      break
+                  heading = line[3:].strip().strip("[]").lstrip("v")
+                  printing = heading == ver
+              if printing:
+                  out.append(line)
+          notes = "\n".join(out).strip() or f"Release {ver}"
+          Path("release_notes.md").write_text(notes + "\n", encoding="utf-8")
+          print(notes)
+          PY
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -160,6 +181,6 @@ jobs:
           draft: false
           prerelease: false
           name: ${{ github.ref_name }}
-          body_path: CHANGELOG.md
+          body_path: release_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
