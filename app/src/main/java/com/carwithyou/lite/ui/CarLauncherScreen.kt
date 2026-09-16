@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,8 +28,9 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * vivo 车联风格车机桌面：状态栏 + 大卡片 + 底部 Dock。
- * 默认横屏，按钮够大，开车盲点可及。
+ * 小米 CarWith 式车机桌面：状态栏 + 左导航大卡 + 右音乐/电话原生卡 + 底部 Dock。
+ * 音乐/电话是结构化数据（手机 8890 推过来），不是投屏画面，可直接点控。
+ * 导航画面仍走视频投屏（点左大卡进入）。
  */
 @Composable
 fun CarLauncherScreen(
@@ -39,10 +39,20 @@ fun CarLauncherScreen(
     connected: Boolean,
     connText: String,
     phoneIp: String,
+    musicTitle: String,
+    musicArtist: String,
+    musicPlaying: Boolean,
+    callState: String,
+    callName: String,
+    battText: String,
     onCast: () -> Unit,
-    onNav: () -> Unit,
-    onMusic: () -> Unit,
-    onSettings: () -> Unit
+    onDirect: (String) -> Unit,
+    onSettings: () -> Unit,
+    onPlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onPrev: () -> Unit,
+    onAnswer: () -> Unit,
+    onHangup: () -> Unit
 ) {
     Scaffold { padding ->
         Column(
@@ -76,6 +86,10 @@ fun CarLauncherScreen(
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     fontSize = 14.sp
                 )
+                if (battText.isNotBlank()) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(battText, color = Color(0xFF2E7D32), fontSize = 14.sp)
+                }
             }
             Spacer(Modifier.height(12.dp))
             // ── 主卡片区 ──
@@ -85,13 +99,13 @@ fun CarLauncherScreen(
                     .weight(1f),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // 左：手机投屏大卡
+                // 左：导航大卡（视频投屏入口）
                 Card(modifier = Modifier.weight(1.4f)) {
                     Column(modifier = Modifier.padding(20.dp)) {
-                        Text("手机投屏", style = MiuixTheme.textStyles.title2)
+                        Text("导航", style = MiuixTheme.textStyles.title2)
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "手机 $phoneIp · 虚拟屏（导航+音乐），手机还能用",
+                            "手机 $phoneIp · 虚拟屏，手机还能用",
                             color = MiuixTheme.colorScheme.onBackgroundVariant,
                             fontSize = 14.sp
                         )
@@ -109,40 +123,59 @@ fun CarLauncherScreen(
                             colors = ButtonDefaults.buttonColorsPrimary()
                         ) {
                             Text(
-                                if (connected) "进入投屏" else "连手机",
+                                if (connected) "进入导航" else "连手机",
                                 fontSize = 22.sp,
                                 color = MiuixTheme.colorScheme.onPrimary
                             )
                         }
                     }
                 }
-                // 右：本地应用
+                // 右：音乐 + 电话原生卡
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Card(modifier = Modifier.weight(1f)) {
-                        Column(modifier = Modifier.padding(20.dp)) {
-                            Text("本地导航", style = MiuixTheme.textStyles.title3)
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text("音乐", style = MiuixTheme.textStyles.title3)
                             Text(
-                                "车机版高德（不断手机时用）",
+                                if (musicTitle.isBlank()) "手机没在放（放首歌自动出）"
+                                else "$musicTitle — $musicArtist",
                                 color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                fontSize = 13.sp
+                                fontSize = 14.sp
                             )
                             Spacer(Modifier.weight(1f))
-                            DockButton("打开导航", onNav)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Box(Modifier.weight(1f)) { SmallButton("上曲", onPrev) }
+                                Box(Modifier.weight(1f)) {
+                                    SmallButton(if (musicPlaying) "暂停" else "播放", onPlayPause)
+                                }
+                                Box(Modifier.weight(1f)) { SmallButton("下曲", onNext) }
+                            }
                         }
                     }
                     Card(modifier = Modifier.weight(1f)) {
-                        Column(modifier = Modifier.padding(20.dp)) {
-                            Text("本地音乐", style = MiuixTheme.textStyles.title3)
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text("电话", style = MiuixTheme.textStyles.title3)
                             Text(
-                                "车机版音乐 + 悬浮歌词",
-                                color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                fontSize = 13.sp
+                                when (callState) {
+                                    "ringing" -> "来电：$callName"
+                                    "offhook" -> "通话中 $callName"
+                                    else -> "无通话（来电自动弹）"
+                                },
+                                color = if (callState == "idle") MiuixTheme.colorScheme.onBackgroundVariant
+                                else Color(0xFF2E7D32),
+                                fontSize = 14.sp
                             )
                             Spacer(Modifier.weight(1f))
-                            DockButton("打开音乐", onMusic)
+                            if (callState == "ringing") {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Box(Modifier.weight(1f)) { SmallButton("接听", onAnswer) }
+                                    Box(Modifier.weight(1f)) { SmallButton("挂断", onHangup) }
+                                }
+                            } else if (callState == "offhook") {
+                                SmallButton("挂断", onHangup)
+                            }
                         }
                     }
                 }
@@ -158,13 +191,24 @@ fun CarLauncherScreen(
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Box(Modifier.weight(1f)) { DockButton("投屏", onCast, primary = true) }
-                    Box(Modifier.weight(1f)) { DockButton("导航", onNav) }
-                    Box(Modifier.weight(1f)) { DockButton("音乐", onMusic) }
+                    Box(Modifier.weight(1f)) { DockButton("主屏", { onDirect("home") }) }
+                    Box(Modifier.weight(1f)) { DockButton("导航", { onDirect("nav") }) }
+                    Box(Modifier.weight(1f)) { DockButton("分屏", { onDirect("split") }) }
                     Box(Modifier.weight(1f)) { DockButton("设置", onSettings) }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SmallButton(text: String, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+        minHeight = 52.dp
+    ) {
+        Text(text, fontSize = 17.sp)
     }
 }
 

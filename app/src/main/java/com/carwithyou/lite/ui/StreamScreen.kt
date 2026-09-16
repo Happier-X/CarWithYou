@@ -2,6 +2,8 @@ package com.carwithyou.lite.ui
 
 import android.view.SurfaceView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -36,7 +38,8 @@ fun StreamScreen(
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onCopyLog: () -> Unit,
-    onSurface: (SurfaceView) -> Unit
+    onSurface: (SurfaceView) -> Unit,
+    onAppCmd: (String) -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         // 全屏画面（手机虚拟屏：导航+音乐）
@@ -83,6 +86,21 @@ fun StreamScreen(
                 modifier = Modifier.padding(top = 4.dp)
             )
         }
+        // 左侧 Dock（CarPlay 式）：发 APP_CMD 回手机切虚拟屏应用，不进画面触摸
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 8.dp)
+                .background(Color(0xAA000000), shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+                .padding(horizontal = 6.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            DockKey("主屏") { onAppCmd("home") }
+            DockKey("导航") { onAppCmd("nav") }
+            DockKey("音乐") { onAppCmd("music") }
+            DockKey("分屏") { onAppCmd("split") }
+        }
         // 右下角小按钮：复制日志（连不上/黑屏时用）
         TextButton(
             text = "日志",
@@ -94,4 +112,14 @@ fun StreamScreen(
             minHeight = 40.dp
         )
     }
+}
+
+@Composable
+private fun DockKey(text: String, onClick: () -> Unit) {
+    TextButton(
+        text = text,
+        onClick = onClick,
+        modifier = Modifier.width(64.dp).height(52.dp),
+        minHeight = 52.dp
+    )
 }

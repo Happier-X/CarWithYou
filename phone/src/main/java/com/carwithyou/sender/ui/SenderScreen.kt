@@ -37,6 +37,7 @@ fun SenderScreen(
     musicIndex: Int,
     virtualMode: Boolean,
     browserMode: Boolean,
+    linkOn: Boolean,
     keepScreen: Boolean,
     adaptive: Boolean,
     debugSave: Boolean,
@@ -44,6 +45,8 @@ fun SenderScreen(
     onMusicIndex: (Int) -> Unit,
     onVirtual: (Boolean) -> Unit,
     onBrowser: (Boolean) -> Unit,
+    onLink: (Boolean) -> Unit,
+    onCarMode: () -> Unit,
     onKeepScreen: (Boolean) -> Unit,
     onAdaptive: (Boolean) -> Unit,
     onDebug: (Boolean) -> Unit,
@@ -52,6 +55,7 @@ fun SenderScreen(
     onRelaunch: () -> Unit,
     onOverlay: () -> Unit,
     onAccess: () -> Unit,
+    onNotif: () -> Unit,
     onBattery: () -> Unit,
     updateHint: String,
     onUpdate: () -> Unit,
@@ -137,6 +141,12 @@ fun SenderScreen(
             SmallTitle("投屏选项")
             Card {
                 SwitchPreference(
+                    checked = linkOn,
+                    onCheckedChange = onLink,
+                    title = "车联服务（音乐/电话同步）",
+                    summary = if (linkOn) "开着：车机桌面音乐卡/来电卡实时同步，支持车机切歌/接挂" else "关了车机就看不到歌名和来电。开它（要电话权限+通知监听）"
+                )
+                SwitchPreference(
                     checked = browserMode,
                     onCheckedChange = onBrowser,
                     title = "降级：车机浏览器直连（不装App也能看）",
@@ -167,6 +177,13 @@ fun SenderScreen(
                     summary = "写到 /Movies/carwithyou"
                 )
             }
+            Spacer(Modifier.height(8.dp))
+            TextButton(
+                text = "进入驾驶模式（连车后大按钮横屏）",
+                onClick = onCarMode,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                minHeight = 52.dp
+            )
             SmallTitle("权限")
             Card {
                 ArrowPreference(
@@ -176,6 +193,10 @@ fun SenderScreen(
                 ArrowPreference(
                     title = "开触摸回传（无障碍）",
                     onClick = onAccess
+                )
+                ArrowPreference(
+                    title = "开音乐同步（通知监听）",
+                    onClick = onNotif
                 )
                 ArrowPreference(
                     title = "电池白名单（防杀后台）",

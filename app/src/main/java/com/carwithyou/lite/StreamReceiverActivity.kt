@@ -44,6 +44,7 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     @Volatile private var lastPong = 0L
 
     private var downNx = 0f; private var downNy = 0f; private var downT = 0L; private var downValid = false
+    @Volatile private var pendingAppCmd = ""
     @Volatile private var feedErrors = 0
     @Volatile private var touchSendErrors = 0
 
@@ -62,7 +63,8 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         AppLog.i(TAG, "进收流页：解码走 SurfaceView，控制走 8889")
         ReceiverKeepService.start(this)
-        // vivo 式自动连接：桌面/开机带 IP 直接进，不用手点连接
+        // CarPlay 式直达：带 APP_CMD 进来，连上控制通道就自动发一次
+        pendingAppCmd = intent.getStringExtra(EXTRA_APP_CMD).orEmpty()
         ip = intent.getStringExtra(EXTRA_IP)?.takeIf { it.isNotBlank() }
             ?: SettingsStore(this).phoneIp.ifBlank { "192.168.43.1" }
         val auto = intent.getBooleanExtra(EXTRA_AUTO, false)
@@ -75,7 +77,8 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     onConnect = { startLoop() },
                     onDisconnect = { stopLoop() },
                     onCopyLog = { Diagnostics.copy(this@StreamReceiverActivity) },
-                    onSurface = { attachSurface(it) }
+                    onSurface = { attachSurface(it) },
+                    onAppCmd = { sendApp(it) }
                 )
             }
         }
@@ -178,6 +181,18 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     connected = true
                     AppLog.i(TAG, "控制/视频通道已连上 $ip")
                     setStatus("已连接，等画面…")
+                    if (pendingAppCmd.isNotBlank()) {
+                        val cmd = pendingAppCmd
+                        pendingAppCmd = ""
+                        scope.launch {
+                            delay(800)
+                            try {
+                                touchOut?.println("APP $cmd")
+                                touchOut?.flush()
+                                AppLog.i(TAG, "直达命令已发：$cmd")
+                            } catch (_: Exception) {}
+                        }
+                    }
 
                     val hb = scope.launch {
                         while (isActive && wantConnect && connected) {
@@ -379,6 +394,19 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private fun stopLoop() {
         wantConnect = false; loopJob?.cancel(); disconnectUI()
     }
+
+    /** 左 Dock 发回手机切虚拟屏应用（CarPlay 式），走 8889 控制通道 */
+    private fun sendApp(cmd: String) {
+        scope.launch {
+            try {
+                touchOut?.println("APP $cmd")
+                touchOut?.flush()
+                AppLog.i(TAG, "Dock切应用：$cmd")
+            } catch (e: Exception) {
+                AppLog.wThrottle(TAG, "Dock命令发不出去：${e.message}", 5_000)
+            }
+        }
+    }
     private fun releaseDecoder() {
         try { decoder?.stop(); decoder?.release() } catch (e: Exception) {
             AppLog.wThrottle(TAG, "释放解码器报错：${e.message}", 5_000)
@@ -407,6 +435,7 @@ class StreamReceiverActivity : AppCompatActivity(), SurfaceHolder.Callback {
     companion object {
         const val EXTRA_IP = "phone_ip"
         const val EXTRA_AUTO = "auto_connect"
+        const val EXTRA_APP_CMD = "app_cmd"
         private const val EXPECTED_FPS = 30
         private const val TAG = "CarWithYou"
 

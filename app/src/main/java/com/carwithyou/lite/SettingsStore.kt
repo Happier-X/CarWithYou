@@ -31,4 +31,13 @@ class SettingsStore(ctx: Context) {
     var autoConnect: Boolean
         get() = sp.getBoolean("autoConnect", true)
         set(v) = sp.edit().putBoolean("autoConnect", v).apply()
+
+    /** 记住的手机蓝牙 MAC，蓝牙连上即自动连车联（亿连式上车即连） */
+    var phoneBtMac: String
+        get() = sp.getString("phoneBtMac", "").orEmpty()
+        set(v) = sp.edit().putString("phoneBtMac", v).apply()
+
+    var btAuto: Boolean
+        get() = sp.getBoolean("btAuto", true)
+        set(v) = sp.edit().putBoolean("btAuto", v).apply()
 }

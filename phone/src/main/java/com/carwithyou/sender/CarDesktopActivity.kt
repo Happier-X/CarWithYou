@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Display
 import android.view.WindowManager
 import androidx.activity.compose.setContent
@@ -26,7 +28,17 @@ class CarDesktopActivity : AppCompatActivity() {
     private var navPkg = ""
     private var musicPkg = ""
     private var displayId = Display.INVALID_DISPLAY
-    private var hint by mutableStateOf("车机虚拟桌面。导航和音乐会在这块屏上打开，手机主屏可以继续用。")
+    private var time by mutableStateOf("--:--")
+    private val timeHandler = Handler(Looper.getMainLooper())
+    private val timeTick = object : Runnable {
+        override fun run() {
+            try {
+                time = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                    .format(java.util.Date())
+            } catch (_: Exception) {}
+            timeHandler.postDelayed(this, 15_000)
+        }
+    }
 
     private val stopReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -43,7 +55,7 @@ class CarDesktopActivity : AppCompatActivity() {
         displayId = intent.getIntExtra(EXTRA_DISPLAY_ID, Display.INVALID_DISPLAY)
         instance = this
         AppLog.i(TAG, "车机桌面已开在 display=$displayId 导航=$navPkg 音乐=$musicPkg")
-        hint = "这块是车机虚拟屏 #$displayId。导航/音乐会叠在上面，手机主屏可以继续用。"
+        timeHandler.post(timeTick)
 
         val filter = IntentFilter(ACTION_STOP)
         ContextCompat.registerReceiver(this, stopReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
@@ -51,9 +63,10 @@ class CarDesktopActivity : AppCompatActivity() {
         setContent {
             CarSenderTheme {
                 DesktopScreen(
-                    hint = hint,
+                    time = time,
                     onNav = { launchNav() },
-                    onMusic = { launchMusic() }
+                    onMusic = { launchMusic() },
+                    onSplit = { autoLaunch() }
                 )
             }
         }
@@ -109,6 +122,7 @@ class CarDesktopActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         try { unregisterReceiver(stopReceiver) } catch (_: Exception) {}
+        timeHandler.removeCallbacks(timeTick)
         if (instance === this) instance = null
         super.onDestroy()
     }

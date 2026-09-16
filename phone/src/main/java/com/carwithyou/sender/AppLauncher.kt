@@ -13,6 +13,33 @@ object AppLauncher {
 
     fun leftBounds(w: Int, h: Int) = Rect(0, 0, (w * 2) / 3, h)
     fun rightBounds(w: Int, h: Int) = Rect((w * 2) / 3, 0, w, h)
+    fun fullBounds(w: Int, h: Int) = Rect(0, 0, w, h)
+
+    /** 用包名 + URI 启动到指定 Display（目的地直达用），失败回落普通启动 */
+    fun launchUri(
+        ctx: Context,
+        pkg: String,
+        uri: android.net.Uri,
+        displayId: Int
+    ): Boolean {
+        if (pkg.isBlank()) return false
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                `package` = pkg
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+            }
+            val opts = ActivityOptions.makeBasic()
+            if (displayId != Display.INVALID_DISPLAY) {
+                opts.launchDisplayId = displayId
+            }
+            displayContext(ctx, displayId).startActivity(intent, opts.toBundle())
+            AppLog.i(TAG, "launched $pkg $uri on display=$displayId")
+            true
+        } catch (e: Exception) {
+            AppLog.w(TAG, "launchUri $pkg failed: ${e.message}，回落普通启动")
+            launch(ctx, pkg, displayId)
+        }
+    }
 
     fun launch(
         ctx: Context,

@@ -752,6 +752,11 @@ class ScreenCastService : Service() {
                 CastConfig.lastLatencyMs = p.getOrNull(4)?.toLongOrNull() ?: 0L
             }
             "PING" -> try { controlOut?.println("PONG ${p.getOrNull(1) ?: ""}"); controlOut?.flush() } catch (_: Exception) {}
+            "APP" -> {
+                // 车机左 Dock 发回来的切应用命令（CarPlay 式）：home/nav/music/split
+                val cmd = p.getOrNull(1)?.lowercase().orEmpty()
+                mainHandler.post { switchVirtualApp(cmd) }
+            }
             "TAP" -> {
                 val x = p.getOrNull(1)?.toFloatOrNull() ?: return
                 val y = p.getOrNull(2)?.toFloatOrNull() ?: return
@@ -774,6 +779,34 @@ class ScreenCastService : Service() {
                 } else svc.swipe(x0, y0, x1, y1, dur)
             }
         }
+    }
+
+    /** 车机 Dock 切虚拟屏应用（CarPlay 式主屏切换），只在虚拟屏模式下有效 */
+    private fun switchVirtualApp(cmd: String) {
+        if (!virtualMode) {
+            lastHint = "镜像模式不支持车机Dock切换"
+            return
+        }
+        val id = CastConfig.displayId
+        if (id == Display.INVALID_DISPLAY || id == Display.DEFAULT_DISPLAY) {
+            lastHint = "虚拟屏还没建好，稍后再点"
+            AppLog.w(TAG, "APP $cmd 被拒：displayId=$id")
+            return
+        }
+        val w = CastConfig.screenW
+        val h = CastConfig.screenH
+        when (cmd) {
+            "home" -> startCarDesktop(id)
+            "nav" -> if (!AppLauncher.launch(this, navPkg, id, AppLauncher.fullBounds(w, h))) {
+                lastHint = "导航打不开（$navPkg 装了吗）"
+            }
+            "music" -> if (!AppLauncher.launch(this, musicPkg, id, AppLauncher.fullBounds(w, h))) {
+                lastHint = "音乐打不开（$musicPkg 装了吗）"
+            }
+            "split" -> launchAppsOntoVirtual()
+            else -> return
+        }
+        AppLog.i(TAG, "车机Dock切应用：$cmd")
     }
 
     private fun acquireWakeLock() {

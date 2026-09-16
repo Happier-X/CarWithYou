@@ -32,6 +32,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 fun HomeScreen(
     status: String,
+    hasLocalApps: Boolean,
     navPkgs: List<String>,
     musicPkgs: List<String>,
     navIndex: Int,
@@ -50,6 +51,11 @@ fun HomeScreen(
     onAutoConnect: (Boolean) -> Unit,
     phoneIpText: String,
     onPhoneIp: (String) -> Unit,
+    btNames: List<String>,
+    btIndex: Int,
+    onBtIndex: (Int) -> Unit,
+    btAuto: Boolean,
+    onBtAuto: (Boolean) -> Unit,
     updateHint: String,
     onUpdate: () -> Unit,
     logHint: String,
@@ -73,39 +79,44 @@ fun HomeScreen(
                 fontSize = 14.sp
             )
             Spacer(Modifier.height(16.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Card {
-                        WindowDropdownPreference(
-                            items = navPkgs,
-                            selectedIndex = navIndex.coerceIn(0, (navPkgs.size - 1).coerceAtLeast(0)),
-                            title = "导航",
-                            onSelectedIndexChange = onNavIndex
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    BigButton("打开高德", onOpenNav)
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Card {
-                        WindowDropdownPreference(
-                            items = musicPkgs,
-                            selectedIndex = musicIndex.coerceIn(0, (musicPkgs.size - 1).coerceAtLeast(0)),
-                            title = "音乐",
-                            onSelectedIndexChange = onMusicIndex
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    BigButton("打开音乐", onOpenMusic)
+            if (hasLocalApps) {
+                LocalAppsBlock(
+                    navPkgs = navPkgs,
+                    musicPkgs = musicPkgs,
+                    navIndex = navIndex,
+                    musicIndex = musicIndex,
+                    onNavIndex = onNavIndex,
+                    onMusicIndex = onMusicIndex,
+                    onOpenNav = onOpenNav,
+                    onOpenMusic = onOpenMusic,
+                    onSplit = onSplit,
+                    onSave = onSave
+                )
+            } else {
+                Card {
+                    Text(
+                        "车机没装本地导航/音乐，导航音乐全走手机投屏：回桌面点投屏或左 Dock 直达。",
+                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(16.dp)
+                    )
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            BigButton("一键分屏：导航 + 音乐", onSplit)
-            Spacer(Modifier.height(8.dp))
-            SecondaryButton("保存选择", onSave)
+            SmallTitle("上车即连（蓝牙）")
+            Card {
+                SwitchPreference(
+                    checked = btAuto,
+                    onCheckedChange = onBtAuto,
+                    title = "蓝牙连上手机自动连车联",
+                    summary = "跟手机蓝牙配对一次，以后上车蓝牙一连就自动连车联，不用手点"
+                )
+                WindowDropdownPreference(
+                    items = btNames,
+                    selectedIndex = btIndex.coerceIn(0, (btNames.size - 1).coerceAtLeast(0)),
+                    title = "我的手机（已配对蓝牙里选）",
+                    onSelectedIndexChange = onBtIndex
+                )
+            }
             SmallTitle("自动连接（上车即连）")
             Card {
                 SwitchPreference(
@@ -187,6 +198,54 @@ fun HomeScreen(
             )
         }
     }
+}
+
+@Composable
+private fun LocalAppsBlock(
+    navPkgs: List<String>,
+    musicPkgs: List<String>,
+    navIndex: Int,
+    musicIndex: Int,
+    onNavIndex: (Int) -> Unit,
+    onMusicIndex: (Int) -> Unit,
+    onOpenNav: () -> Unit,
+    onOpenMusic: () -> Unit,
+    onSplit: () -> Unit,
+    onSave: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Card {
+                WindowDropdownPreference(
+                    items = navPkgs,
+                    selectedIndex = navIndex.coerceIn(0, (navPkgs.size - 1).coerceAtLeast(0)),
+                    title = "导航",
+                    onSelectedIndexChange = onNavIndex
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            BigButton("打开高德", onOpenNav)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Card {
+                WindowDropdownPreference(
+                    items = musicPkgs,
+                    selectedIndex = musicIndex.coerceIn(0, (musicPkgs.size - 1).coerceAtLeast(0)),
+                    title = "音乐",
+                    onSelectedIndexChange = onMusicIndex
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            BigButton("打开音乐", onOpenMusic)
+        }
+    }
+    Spacer(Modifier.height(16.dp))
+    BigButton("一键分屏：导航 + 音乐", onSplit)
+    Spacer(Modifier.height(8.dp))
+    SecondaryButton("保存选择", onSave)
 }
 
 @Composable

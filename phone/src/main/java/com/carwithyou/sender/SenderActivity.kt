@@ -39,6 +39,7 @@ class SenderActivity : AppCompatActivity() {
     private var musicIndex by mutableIntStateOf(0)
     private var virtualMode by mutableStateOf(true)
     private var browserMode by mutableStateOf(false)
+    private var linkOn by mutableStateOf(true)
     private var keepScreen by mutableStateOf(true)
     private var adaptive by mutableStateOf(true)
     private var debugSave by mutableStateOf(false)
@@ -71,6 +72,21 @@ class SenderActivity : AppCompatActivity() {
         } else {
             AppLog.w(TAG, "录屏授权被拒（rc=${r.resultCode} data=${r.data != null}）")
             toast("要给录屏权限才能建车机屏（录的是虚拟屏，不是你手机画面）")
+        }
+    }
+
+    private val phonePerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants.values.all { it }) {
+            AppLog.i(TAG, "电话权限已齐，起车联服务")
+            LinkService.start(this)
+            linkOn = true
+            prefs.linkEnabled = true
+        } else {
+            AppLog.w(TAG, "电话权限没给全，来电只显示状态、不能代接/代挂")
+            toast("电话权限没给全：来电只显示、不能在车机上接/挂")
+            LinkService.start(this)
+            linkOn = true
+            prefs.linkEnabled = true
         }
     }
 
@@ -125,6 +141,8 @@ class SenderActivity : AppCompatActivity() {
         fillAppSpinners()
         virtualMode = prefs.virtualMode
         browserMode = prefs.browserMode
+        linkOn = prefs.linkEnabled
+        if (linkOn) LinkService.start(this)
         keepScreen = prefs.keepScreenOn
         applyKeepScreen()
         ipText = "手机热点IP：${NetUtils.hotspotIp(this)}（车机连热点，车机App填这个连）"
@@ -145,6 +163,7 @@ class SenderActivity : AppCompatActivity() {
                     musicIndex = musicIndex,
                     virtualMode = virtualMode,
                     browserMode = browserMode,
+                    linkOn = linkOn,
                     keepScreen = keepScreen,
                     adaptive = adaptive,
                     debugSave = debugSave,
@@ -152,6 +171,10 @@ class SenderActivity : AppCompatActivity() {
                     onMusicIndex = { musicIndex = it },
                     onVirtual = { virtualMode = it; prefs.virtualMode = it },
                     onBrowser = { browserMode = it; prefs.browserMode = it },
+                    onLink = { setLink(it) },
+                    onCarMode = {
+                        startActivity(Intent(this, CarModeActivity::class.java))
+                    },
                     onKeepScreen = {
                         keepScreen = it
                         prefs.keepScreenOn = it
@@ -187,6 +210,10 @@ class SenderActivity : AppCompatActivity() {
                     onAccess = {
                         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                         toast("打开 Car投屏-手机端 的无障碍开关，车机才能反控")
+                    },
+                    onNotif = {
+                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        toast("打开 Car投屏-音乐同步监听，车机才能看歌名/切歌")
                     },
                     onBattery = {
                         try {
@@ -300,6 +327,25 @@ class SenderActivity : AppCompatActivity() {
         }
     }
 
+    private fun setLink(on: Boolean) {
+        if (on) {
+            AppLog.i(TAG, "开车联服务（音乐/电话同步 :${LinkService.PORT}）")
+            phonePerms.launch(
+                arrayOf(
+                    android.Manifest.permission.READ_PHONE_STATE,
+                    android.Manifest.permission.READ_CALL_LOG,
+                    android.Manifest.permission.READ_CONTACTS,
+                    android.Manifest.permission.ANSWER_PHONE_CALLS
+                )
+            )
+        } else {
+            AppLog.i(TAG, "关车联服务")
+            LinkService.stop(this)
+            linkOn = false
+            prefs.linkEnabled = false
+        }
+    }
+
     private fun modeHint(): String = if (browserMode) {
         "降级模式：车机不用装App，用浏览器打开上面的地址看。画质约15fps，首选还是车机装App走H264。"
     } else if (virtualMode) {
@@ -311,6 +357,7 @@ class SenderActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         ipText = "手机热点IP：${NetUtils.hotspotIp(this)}（车机连热点，车机App填这个连）"
+        linkOn = LinkService.running || prefs.linkEnabled
         logHint = Diagnostics.hint()
         if (ScreenCastService.running) startStatsPoll()
     }

@@ -21,6 +21,11 @@ class SenderPrefs(ctx: Context) {
         get() = sp.getBoolean("browser", false)
         set(v) { sp.edit().putBoolean("browser", v).apply() }
 
+    /** 小米 CarWith 式结构化车联（音乐/电话同步） */
+    var linkEnabled: Boolean
+        get() = sp.getBoolean("link", true)
+        set(v) { sp.edit().putBoolean("link", v).apply() }
+
     var keepScreenOn: Boolean
         get() = sp.getBoolean("keep_screen", true)
         set(v) { sp.edit().putBoolean("keep_screen", v).apply() }

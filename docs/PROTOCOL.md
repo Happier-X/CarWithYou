@@ -38,6 +38,7 @@
 | `PONG <ts>` | 任一 → 对方 | 心跳回包 |
 | `TAP nx ny` | 车机 → 手机 | 点击，`nx,ny∈[0,1]`，**视频帧归一化坐标**（已扣黑边） |
 | `SWIPE x0 y0 x1 y1 durMs` | 车机 → 手机 | 滑动，同上 |
+| `APP home\|nav\|music\|split` | 车机 → 手机 | 左 Dock 切虚拟屏应用（CarPlay 式，仅虚拟屏模式）：主屏/导航全屏/音乐全屏/左右分屏 |
 
 ## 3. 编码参数
 
@@ -86,6 +87,30 @@ cw = vw*s, ch = vh*s, ox = (W-cw)/2, oy = (H-ch)/2
 - 手机：热点固定 SSID，车机记住自动连。
 - 系统底线：**第一次建虚拟屏仍要点一次「允许录屏」**（用来建独立 Display，不是录手机主屏）。之后不重启可复用。
 - 开发期用 `scripts/adb-preauth.ps1` 做电池白名单 + 权限预授权。
+
+## 8. 结构化车联 v2（小米 CarWith / HiCar 式，音乐/电话原生同步）
+
+> 不传整屏视频，只同步数据。手机 `LinkService` 当 TCP Server（端口 **8890**），车机 `LinkClient` 主动连。UTF-8 JSON 行（`\n` 结尾）。声音仍走蓝牙；导航画面这版仍走 8888 视频（车机“投屏”入口），音乐/电话走本链路原生显示和控制。
+
+手机 → 车机：
+
+| 行 | 含义 |
+|---|---|
+| `{"t":"HELLO","ver":2}` | 握手，建连后先发 + 附带当前快照 |
+| `{"t":"MUSIC","app","title","artist","playing"}` | 当前播放（经 MediaSession，需通知监听；变了才推，另有 2s 轮询） |
+| `{"t":"PHONE","state","number","name"}` | `state` = `idle`/`ringing`/`offhook`，name 经通讯录查（需 READ_CONTACTS） |
+| `{"t":"STATUS","batt","charging","sig"}` | 手机电量（0~100，-1 未知）/是否充电/信号格 0~4（-1 未知），10 秒推一次，车机桌面状态栏显示 |
+| `{"t":"PONG","ts"}` | 心跳回包 |
+
+车机 → 手机：
+
+| 行 | 含义 |
+|---|---|
+| `{"t":"PING","ts"}` | 心跳 |
+| `{"t":"MUSIC_CMD","cmd"}` | `play`/`pause`/`toggle`/`next`/`prev`，经 MediaSession transportControls 执行 |
+| `{"t":"PHONE_CMD","cmd"}` | `answer`/`hangup`，经 TelecomManager（需 ANSWER_PHONE_CALLS 等电话权限，被拒则只显示状态） |
+
+预留：`{"t":"NAV_POI","keyword"}`（车机搜目的地 → 手机虚拟屏高德直达，车机零本地地图）。
 
 ## 6. 音频
 
