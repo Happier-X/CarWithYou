@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+### Fixed
+- 连不上/连上即断三连修：编码器三档降级（部分机型拒 Baseline + 低延迟组合，之前直接“启动失败”杀服务）；自适应决策锁 2 秒一次（之前每帧调，码率瞬间顶满并误触发分辨率切换）；镜像/虚拟屏都不再重建 Display（同个 MediaProjection 二次建屏抛 SecurityException 直接杀服务）
+- 虚拟屏优先 DisplayManager 建屏：MediaProjection 建的屏在部分系统上不让 App 放 Activity（Permission Denial → 黑屏看着像连不上），建不出才回落录屏路径
+- 车机收流页左 Dock 按键加宽，两字不再被截断
+
 ## 0.1.6
 ### Added
 - 车机零本地依赖：没装本地导航/音乐时设置页隐藏本地区，桌面 Dock 改手机直达（主屏/导航/分屏：进投屏自动连并下发 `APP`），左大卡+音乐电话原生卡全走手机

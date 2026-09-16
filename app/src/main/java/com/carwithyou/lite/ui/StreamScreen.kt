@@ -119,7 +119,7 @@ private fun DockKey(text: String, onClick: () -> Unit) {
     TextButton(
         text = text,
         onClick = onClick,
-        modifier = Modifier.width(64.dp).height(52.dp),
+        modifier = Modifier.width(76.dp).height(52.dp),
         minHeight = 52.dp
     )
 }

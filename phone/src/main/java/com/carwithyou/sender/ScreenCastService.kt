@@ -280,7 +280,14 @@ class ScreenCastService : Service() {
         return proj
     }
 
-    /** 虚拟屏只建一次，断线重连不重建，避免车上的 App 被杀掉 */
+    /**
+     * 虚拟屏只建一次，断线重连不重建，避免车上的 App 被杀掉。
+     *
+     * Display 归属决定生死：MediaProjection 建的屏，AMS 不让 App 用
+     * launchDisplayId 往上放 Activity（Permission Denial），屏就永远是黑的，
+     * 车机看着就是“连接不上”。所以优先 DisplayManager 建屏（App 自己的屏，
+     * 可放 Activity），建不出来才回落 MediaProjection（部分 ROM 限制副屏）。
+     */
     private suspend fun runVirtualSession() {
         val res = virtualRes(CastConfig.currentResShort)
         CastConfig.videoW = res.w
@@ -292,24 +299,31 @@ class ScreenCastService : Service() {
         encoderSurface = surface
         // 有录屏授权时优先 MediaProjection + PUBLIC，第三方 App 才能落到副屏（CarPlus 同款）。
         // DisplayManager 无 PUBLIC 时高德/音乐会弹回手机，只作无授权兜底。
-        val haveProjection = projectionData != null && resultCode == Activity.RESULT_OK
-        if (haveProjection) {
-            startFg(withProjection = true)
-            val proj = obtainProjection() ?: run {
-                sendBroadcast(Intent(ACTION_NEED_PROJECTION).setPackage(packageName))
-                stopSelf()
-                return
+        // 注：顺序反过来了——先试 DisplayManager（自己的屏，Activity 放得上去），
+        // 建不出/放不上去再走 MediaProjection。见 runVirtualSession 头注释。
+        vdisplay = createIndependentDisplay(res.w, res.h, surface)
+        if (vdisplay == null) {
+            val haveProjection = projectionData != null && resultCode == Activity.RESULT_OK
+            if (haveProjection) {
+                try {
+                    startFg(withProjection = true)
+                    val proj = obtainProjection() ?: run {
+                        sendBroadcast(Intent(ACTION_NEED_PROJECTION).setPackage(packageName))
+                        stopSelf()
+                        return
+                    }
+                    vdisplay = createProjectionDisplay(proj, res.w, res.h, surface)
+                } catch (e: Exception) {
+                    AppLog.w(TAG, "MediaProjection 建屏也失败：${e.message}")
+                }
             }
-            vdisplay = createProjectionDisplay(proj, res.w, res.h, surface)
-        } else {
-            vdisplay = createIndependentDisplay(res.w, res.h, surface)
-            if (vdisplay == null) {
-                lastHint = "系统不允许普通 App 建独立副屏，需要一次录屏授权（录的是虚拟屏，不是手机画面）"
-                AppLog.e(TAG, lastHint)
-                sendBroadcast(Intent(ACTION_NEED_PROJECTION).setPackage(packageName))
-                stopSelf()
-                return
-            }
+        }
+        if (vdisplay == null) {
+            lastHint = "虚拟屏建不出来（独立副屏被拒），改镜像模式试试"
+            AppLog.e(TAG, lastHint)
+            sendBroadcast(Intent(ACTION_NEED_PROJECTION).setPackage(packageName))
+            stopSelf()
+            return
         }
         val displayId = vdisplay?.display?.displayId ?: Display.INVALID_DISPLAY
         CastConfig.displayId = displayId
@@ -332,29 +346,27 @@ class ScreenCastService : Service() {
     }
 
     private suspend fun runMirrorSession(proj: MediaProjection, dpi: Int) {
-        var currentTier = CastConfig.currentResShort
+        // 注意：同一 MediaProjection 实例只能 createVirtualDisplay 一次，
+        // 第二次就抛 SecurityException（单次 token），所以镜像只建一次 Display，
+        // 只自适应码率（和虚拟屏一致）。分辨率按启动时的档位锁死。
+        // 车机断线重连由 pump 内的 accept 循环承接，不重建 Display。
+        val res = mirrorRes(CastConfig.currentResShort, CastConfig.screenW, CastConfig.screenH)
+        CastConfig.videoW = res.w
+        CastConfig.videoH = res.h
+        val (enc, surface) = createEncoder(res.w, res.h, CastConfig.currentBitrate)
+        encoder = enc
+        encoderSurface = surface
+        vdisplay = proj.createVirtualDisplay(
+            "carwithyou-mirror", res.w, res.h, dpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            surface, null, mainHandler
+        )
+        sendConfig(res.w, res.h)
+        // 车机断线重连由这里承接：同一编码器/Display 上反复 accept，不重建。
+        // allowResize=false：只热切码率（Single-use projection token 禁止二次建屏）。
         while (scope.isActive && running) {
-            val res = mirrorRes(currentTier, CastConfig.screenW, CastConfig.screenH)
-            CastConfig.videoW = res.w
-            CastConfig.videoH = res.h
-            CastConfig.currentResShort = currentTier
-            val (enc, surface) = createEncoder(res.w, res.h, CastConfig.currentBitrate)
-            encoder = enc
-            encoderSurface = surface
-            vdisplay = proj.createVirtualDisplay(
-                "carwithyou-mirror", res.w, res.h, dpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                surface, null, mainHandler
-            )
-            sendConfig(res.w, res.h)
-            val resized = pumpWithAdapt(enc, currentTier, allowResize = true)
-            releaseEncoderAndDisplay()
-            if (resized) {
-                currentTier = CastConfig.currentResShort
-                delay(300)
-            } else if (running) {
-                delay(300)
-            }
+            pumpWithAdapt(enc, CastConfig.currentResShort, allowResize = false)
+            if (running) delay(300)
         }
     }
 
@@ -570,22 +582,48 @@ class ScreenCastService : Service() {
         }
     }
 
+    /**
+     * 建 H264 编码器。三档降级：部分手机/模拟器/车机的编码器会拒掉
+     * KEY_LATENCY 或 Baseline + CBR 组合（configure 直接抛 CodecException），
+     * 之前是直接“启动失败”，这就是“总是连接不上”的一种。现在逐档重试。
+     */
     private fun createEncoder(w: Int, h: Int, bitrate: Int): Pair<MediaCodec, Surface> {
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-            setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-            setInteger(MediaFormat.KEY_FRAME_RATE, CastConfig.FPS)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, CastConfig.IFRAME_INTERVAL)
-            setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-            if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LATENCY, 1)
+        var lastErr: Exception? = null
+        for (variant in 0..2) {
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                setInteger(MediaFormat.KEY_FRAME_RATE, CastConfig.FPS)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, CastConfig.IFRAME_INTERVAL)
+                if (variant == 0) {
+                    setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+                    setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+                    if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LATENCY, 1)
+                } else if (variant == 1) {
+                    // 去低延迟键：部分软编码器拒它
+                    setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+                }
+                // variant 2：最简配置，码率/模式全由芯片默认
+            }
+            try {
+                val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                try {
+                    enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                } catch (e: Exception) {
+                    try { enc.release() } catch (_: Exception) {}
+                    throw e
+                }
+                val surface = enc.createInputSurface()
+                enc.start()
+                AppLog.i(TAG, "编码器已起[v$variant]：${enc.name} ${w}x${h} @%.1fM ${CastConfig.FPS}fps".format(bitrate / 1_000_000f))
+                return enc to surface
+            } catch (e: Exception) {
+                lastErr = e
+                AppLog.w(TAG, "编码器配置[v$variant]被拒（${e.javaClass.simpleName}），降级重试")
+            }
         }
-        val enc = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        val surface = enc.createInputSurface()
-        enc.start()
-        AppLog.i(TAG, "编码器已起：${enc.name} ${w}x${h} @%.1fM ${CastConfig.FPS}fps".format(bitrate / 1_000_000f))
-        return enc to surface
+        lastHint = "手机编码器起不来（三档配置都被拒），换镜像模式或重启手机再试"
+        throw lastErr ?: IllegalStateException("createEncoder failed")
     }
 
     private fun sendConfig(w: Int, h: Int) {
@@ -604,12 +642,18 @@ class ScreenCastService : Service() {
      */
     private fun pumpWithAdapt(enc: MediaCodec, currentTier: Int, allowResize: Boolean): Boolean {
         var needResize = false
+        // 协议要求：收到 STATS 后每 2 秒决策一次。之前是每帧都调，
+        // 码率几十毫秒就顶满并误触发分辨率切换，直接把推流干死。
+        var lastDecideAt = 0L
         try {
             val client = videoServer?.accept() ?: return false
             AppLog.i(TAG, "车机连上视频端口 $VIDEO_PORT")
             client.use { sock ->
                 val out = DataOutputStream(sock.getOutputStream())
                 val info = MediaCodec.BufferInfo()
+                var frames = 0L
+                var bytes = 0L
+                var lastLogAt = 0L
                 while (scope.isActive && running && !needResize) {
                     val idx = enc.dequeueOutputBuffer(info, 10_000)
                     if (idx >= 0) {
@@ -619,6 +663,8 @@ class ScreenCastService : Service() {
                         buf.get(data)
                         enc.releaseOutputBuffer(idx, false)
                         if (info.size > 0) {
+                            frames++
+                            bytes += data.size
                             try {
                                 out.writeInt(data.size)
                                 out.write(data)
@@ -634,6 +680,14 @@ class ScreenCastService : Service() {
                         }
                     }
                     if (CastConfig.adaptiveEnabled) {
+                        val logNow = System.currentTimeMillis()
+                        if (logNow - lastLogAt >= 5000) {
+                            lastLogAt = logNow
+                            AppLog.i(TAG, "推流中 frames=$frames ${bytes / 1024}KB idx=$idx")
+                        }
+                        val now = System.currentTimeMillis()
+                        if (now - lastDecideAt < 2000) continue
+                        lastDecideAt = now
                         when (CastConfig.decide()) {
                             0 -> {
                                 try {
