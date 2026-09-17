@@ -71,6 +71,13 @@ class MainActivity : AppCompatActivity() {
     private var btConnected by mutableStateOf(false)
     private var btRegistered = false
 
+    // A 路线（ADB 链路）设置项
+    private var adbTarget by mutableStateOf("")
+    private var adbMirror by mutableStateOf(false)
+    private var adbNavPkg by mutableStateOf("")
+    private var adbMusicPkg by mutableStateOf("")
+    private var adbAutoLaunch by mutableStateOf(true)
+
     private val btPerm = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -187,6 +194,7 @@ class MainActivity : AppCompatActivity() {
                         else "",
                         onCast = { openCast() },
                         onDirect = { openDirect(it) },
+                        onAdbCast = { openAdb("") },
                         onSettings = { showSettings = true },
                         onPlayPause = { LinkClient.musicCmd(if (musicPlaying) "pause" else "play") },
                         onNext = { LinkClient.musicCmd("next") },
@@ -245,6 +253,20 @@ class MainActivity : AppCompatActivity() {
                             onNotif = {
                                 startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                                 toast("打开 CarWithYou歌词监听 的开关")
+                            },
+                            adbTarget = adbTarget,
+                            onAdbTarget = { adbTarget = it; store.adbTarget = it },
+                            adbMirror = adbMirror,
+                            onAdbMirror = { adbMirror = it; store.adbMirror = it },
+                            adbNavPkg = adbNavPkg,
+                            onAdbNavPkg = { adbNavPkg = it; store.adbNavPkg = it },
+                            adbMusicPkg = adbMusicPkg,
+                            onAdbMusicPkg = { adbMusicPkg = it; store.adbMusicPkg = it },
+                            adbAutoLaunch = adbAutoLaunch,
+                            onAdbAutoLaunch = { adbAutoLaunch = it; store.adbAutoLaunch = it },
+                            onAdbCast = { openAdb("") },
+                            onAdbPair = {
+                                startActivity(Intent(this@MainActivity, AdbPairActivity::class.java))
                             },
                             autoConnect = store.autoConnect,
                             onAutoConnect = { store.autoConnect = it },
@@ -336,6 +358,25 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    /**
+     * A 路线（ADB 链路，手机零安装）：车机自己连手机 adbd。
+     * 没配过地址就直接跳设置，免得进去就一条红字报错。
+     */
+    private fun openAdb(cmd: String) {
+        val target = store.adbTarget
+        if (target.isBlank()) {
+            showSettings = true
+            toast("先在设置里填「手机ADB地址」，例如 192.168.1.20:5555")
+            return
+        }
+        AppLog.i("Main", "ADB 投屏 $target cmd=$cmd")
+        startActivity(Intent(this, AdbStreamActivity::class.java).apply {
+            putExtra(AdbStreamActivity.EXTRA_TARGET, target)
+            putExtra(AdbStreamActivity.EXTRA_AUTO, true)
+            if (cmd.isNotBlank()) putExtra(AdbStreamActivity.EXTRA_APP_CMD, cmd)
+        })
+    }
+
     override fun onResume() {
         super.onResume()
         refreshApps()
@@ -343,6 +384,11 @@ class MainActivity : AppCompatActivity() {
         phoneIp = store.phoneIp
         logHint = Diagnostics.hint()
         refreshBt()
+        adbTarget = store.adbTarget
+        adbMirror = store.adbMirror
+        adbNavPkg = store.adbNavPkg
+        adbMusicPkg = store.adbMusicPkg
+        adbAutoLaunch = store.adbAutoLaunch
         handler.removeCallbacks(tick)
         handler.post(tick)
     }

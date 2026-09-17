@@ -61,7 +61,19 @@ fun HomeScreen(
     logHint: String,
     onShowLog: () -> Unit,
     onCopyLog: () -> Unit,
-    onCopyStatus: () -> Unit
+    onCopyStatus: () -> Unit,
+    adbTarget: String = "",
+    onAdbTarget: (String) -> Unit = {},
+    adbMirror: Boolean = false,
+    onAdbMirror: (Boolean) -> Unit = {},
+    adbNavPkg: String = "",
+    onAdbNavPkg: (String) -> Unit = {},
+    adbMusicPkg: String = "",
+    onAdbMusicPkg: (String) -> Unit = {},
+    adbAutoLaunch: Boolean = true,
+    onAdbAutoLaunch: (Boolean) -> Unit = {},
+    onAdbCast: () -> Unit = {},
+    onAdbPair: () -> Unit = {}
 ) {
     Scaffold { padding ->
         Column(
@@ -136,6 +148,82 @@ fun HomeScreen(
             }
             Spacer(Modifier.height(8.dp))
             BigButton("连手机虚拟屏（导航+音乐上车，手机还能用）", onCast)
+            Spacer(Modifier.height(20.dp))
+            SmallTitle("A 路线：ADB 链路（手机零安装）")
+            Card {
+                TextField(
+                    value = adbTarget,
+                    onValueChange = onAdbTarget,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    singleLine = true,
+                    label = "手机 ADB 地址 host:port（如 192.168.1.20:5555）",
+                    useLabelAsPlaceholder = true
+                )
+                SwitchPreference(
+                    checked = adbMirror,
+                    onCheckedChange = onAdbMirror,
+                    title = "镜像手机主屏",
+                    summary = if (adbMirror) {
+                        "车机看手机上那一个屏（手机不能干别的）"
+                    } else {
+                        "默认：在手机上新建独立虚拟屏，投进去的 App 跟手机互不干扰"
+                    }
+                )
+                TextField(
+                    value = adbNavPkg,
+                    onValueChange = onAdbNavPkg,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    singleLine = true,
+                    label = "手机侧导航包名（默认 com.autonavi.minimap）",
+                    useLabelAsPlaceholder = true
+                )
+                TextField(
+                    value = adbMusicPkg,
+                    onValueChange = onAdbMusicPkg,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    singleLine = true,
+                    label = "手机侧音乐包名（默认 com.tencent.qqmusic）",
+                    useLabelAsPlaceholder = true
+                )
+                SwitchPreference(
+                    checked = adbAutoLaunch,
+                    onCheckedChange = onAdbAutoLaunch,
+                    title = "连上就自动投导航",
+                    summary = if (adbAutoLaunch) {
+                        "进投屏页直接把导航 App 投到虚拟屏（必开：空屏没有任何画面）"
+                    } else {
+                        "关掉后需要手动点 Dock 上的导航/音乐才会出画面"
+                    }
+                )
+                Text(
+                    "手机要先开无线调试（或 USB 插车机做过转发），并在手机上同意一次调试授权。" +
+                        "第一次用先点下面的「无线配对手机」，输入手机上的配对码即可，之后就不用再管了。" +
+                        "投屏时手机的调试通知不能关。",
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Button(
+                    onClick = onAdbPair,
+                    modifier = Modifier.weight(1f).height(64.dp),
+                    minHeight = 64.dp
+                ) {
+                    Text("无线配对手机")
+                }
+                Button(
+                    onClick = onAdbCast,
+                    modifier = Modifier.weight(1.4f).height(64.dp),
+                    minHeight = 64.dp
+                ) {
+                    Text("ADB 投屏（独立虚拟屏）")
+                }
+            }
             Spacer(Modifier.height(20.dp))
             HorizontalDivider()
             SmallTitle(

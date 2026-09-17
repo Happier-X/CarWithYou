@@ -29,6 +29,14 @@ class LiteApp : Application() {
         if (StreamReceiverActivity.lastError.isNotBlank()) {
             sb.append("最近错误：").append(StreamReceiverActivity.lastError).append('\n')
         }
+        sb.append("ADB 链路：").append(AdbStreamActivity.statusText)
+        if (AdbStreamActivity.lastW > 0) {
+            sb.append(" ").append(AdbStreamActivity.lastW).append('x').append(AdbStreamActivity.lastH)
+        }
+        if (AdbStreamActivity.lastError.isNotBlank()) {
+            sb.append("（").append(AdbStreamActivity.lastError.take(120)).append("）")
+        }
+        sb.append('\n')
         sb.append("悬浮窗 ").append(
             if (LyricOverlayService.canDrawOverlays(ctx)) "OK" else "缺权限"
         )

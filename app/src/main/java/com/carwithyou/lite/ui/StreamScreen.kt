@@ -39,7 +39,9 @@ fun StreamScreen(
     onDisconnect: () -> Unit,
     onCopyLog: () -> Unit,
     onSurface: (SurfaceView) -> Unit,
-    onAppCmd: (String) -> Unit
+    onAppCmd: (String) -> Unit,
+    ipLabel: String = "手机IP",
+    hint: String = "声音走手机蓝牙 · 点画面可反控手机虚拟屏"
 ) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         // 全屏画面（手机虚拟屏：导航+音乐）
@@ -60,7 +62,7 @@ fun StreamScreen(
                     onValueChange = onIpChange,
                     modifier = Modifier.weight(1f),
                     singleLine = true,
-                    label = "手机IP",
+                    label = ipLabel,
                     useLabelAsPlaceholder = true
                 )
                 Spacer(Modifier.width(8.dp))
@@ -80,7 +82,7 @@ fun StreamScreen(
                 )
             }
             Text(
-                "$status · 声音走手机蓝牙 · 点画面可反控手机虚拟屏",
+                "$status · $hint",
                 color = Color(0xFFBBBBBB),
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 4.dp)
@@ -92,8 +94,8 @@ fun StreamScreen(
                 .align(Alignment.CenterStart)
                 .padding(start = 8.dp)
                 .background(Color(0xAA000000), shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
-                .padding(horizontal = 6.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             DockKey("主屏") { onAppCmd("home") }
@@ -101,6 +103,10 @@ fun StreamScreen(
             DockKey("音乐") { onAppCmd("music") }
             DockKey("分屏") { onAppCmd("split") }
             DockKey("返回") { onAppCmd("back") }
+            // 旋转：手机上虚拟屏转 90°，导航常常要横屏才好看
+            DockKey("旋转") { onAppCmd("rotate") }
+            // 粘贴：把车机剪切板同步到手机再粘贴（中文只能走这条路，按键注入只能打英文）
+            DockKey("粘贴") { onAppCmd("paste") }
         }
         // 右下角小按钮：复制日志（连不上/黑屏时用）
         TextButton(
@@ -120,7 +126,7 @@ private fun DockKey(text: String, onClick: () -> Unit) {
     TextButton(
         text = text,
         onClick = onClick,
-        modifier = Modifier.width(76.dp).height(52.dp),
-        minHeight = 52.dp
+        modifier = Modifier.width(68.dp).height(42.dp),
+        minHeight = 42.dp
     )
 }

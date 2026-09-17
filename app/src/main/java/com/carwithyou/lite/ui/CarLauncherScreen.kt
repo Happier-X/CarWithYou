@@ -47,6 +47,7 @@ fun CarLauncherScreen(
     battText: String,
     onCast: () -> Unit,
     onDirect: (String) -> Unit,
+    onAdbCast: (() -> Unit)? = null,
     onSettings: () -> Unit,
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
@@ -195,6 +196,9 @@ fun CarLauncherScreen(
                     Box(Modifier.weight(1f)) { DockButton("导航", { onDirect("nav") }) }
                     Box(Modifier.weight(1f)) { DockButton("分屏", { onDirect("split") }) }
                     Box(Modifier.weight(1f)) { DockButton("设置", onSettings) }
+                    if (onAdbCast != null) {
+                        Box(Modifier.weight(1f)) { DockButton("ADB投屏", onAdbCast) }
+                    }
                 }
             }
         }
