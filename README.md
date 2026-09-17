@@ -46,6 +46,20 @@
 
 若导航/音乐弹到了手机上：点「重新把导航/音乐丢到车机屏」。仍不行就关掉独立虚拟屏，改镜像（要占手机）。
 
+### 3.1 A 路线（车机直连手机 ADB，手机零安装）
+
+这条链路不用在手机上装任何 App：车机自己当 ADB 客户端，用 shell 身份在手机上建一块**独立虚拟屏**，再把导航投进去，注入输入也免无障碍。
+
+首次上车只需要做**一次**配对：
+
+1. 手机：`设置 → 开发者选项 → 无线调试` 打开，点 `使用配对码配对设备`。
+2. 车机：首页 `A 路线` 区块点 `无线配对手机`，填入手机屏幕上显示的 **配对端口**、**6 位配对码**，以及**无线调试页面上那个端口**，点「一键配对并开启 5555 端口」。
+3. 车机会自动完成配对，并顺手把手机的明文 `5555` 端口开出来，同时把 `手机IP:5555` 存进设置。之后进车自动连，不用再配对。
+
+不想用无线调试也行：把手机的 ADB 授权好并 `adb tcpip 5555` 一次，然后在首页直接填 `手机IP:5555` 投屏即可。
+
+配对用的是车机自己的 ADB 密钥（自签的 TLS 客户端证书），所以**手机上只会弹这一次配对，不会再有第二次「允许 USB 调试」确认**。
+
 ## 4. 开发顺序
 
 1. 环境确认 → `scripts/check-car.ps1`
@@ -59,6 +73,7 @@
 9. 音频优化 → 当前蓝牙方案；内录是后续
 10. **检查更新 → 已做（设置页查 GitHub Release，下载即装）**
 11. **应用内诊断日志 → 已做（两端设置页「诊断」，一键复制报错）**
+12. **A 路线（车机直连手机 ADB，手机零安装）→ 已通**：`adb-core` 协议栈 + `server` 采集端 + 车机端投屏页全链路验通；Android 11+ 无线调试**首次配对**已接（配对后自动 `tcpip:5555`，后续全走明文）
 
 ## 5. 构建安装
 
@@ -107,6 +122,27 @@ GitHub Release 推 `v*` 标签触发 `release.yml`，上传：
 
 ## 6. 参考
 
-- Scrcpy：H.264/CBR/双Socket/低延迟标杆
+- Scrcpy：H.264/CBR/双Socket/低延迟标杆，同时也是本项目 shell 采集方案的**代码底座**（Apache-2.0）
+- Easycontrol_For_Car / 易控车机版：车机端 ADB 客户端 + 手机端零安装的思路来源，见「7. 许可证」里的致谢
 - CarPlus / DisplayManager Presentation：独立虚拟屏，不占手机
 - Android 官方 MediaProjection + MediaCodec 示例
+
+## 7. 许可证
+
+本项目采用 **GNU General Public License v3.0**，全文见 [`LICENSE`](LICENSE)。
+
+你可以自由使用、修改、分发，包括商用；但分发衍生作品时必须：
+
+- 继续以 GPL-3.0 授权（不能闭源）
+- 保留版权声明与许可证全文
+- 提供对应源码
+
+### 第三方致谢
+
+本项目在实现「车机端 ADB 直连 + 手机端 shell 身份采集」时参考并复用了以下项目，均与 GPL-3.0 兼容：
+
+| 项目 | 许可证 | 用途 |
+|---|---|---|
+| [Genymobile/scrcpy](https://github.com/Genymobile/scrcpy) | Apache-2.0 | server 端采集/编码/注入的代码底座 |
+| [eiyooooo/Easycontrol_For_Car](https://github.com/eiyooooo/Easycontrol_For_Car) | GPL-3.0 | 车机端 ADB 协议栈、虚拟屏与应用流转的实现参考 |
+| [MuntashirAkon/libadb-android](https://github.com/MuntashirAkon/libadb-android) | GPL-3.0-or-later **或** Apache-2.0（双许可） | Android 11+ 无线调试配对 |
