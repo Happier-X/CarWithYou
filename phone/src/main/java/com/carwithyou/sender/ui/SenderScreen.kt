@@ -37,6 +37,8 @@ fun SenderScreen(
     musicIndex: Int,
     virtualMode: Boolean,
     browserMode: Boolean,
+    singleApp: Boolean,
+    singleAppSupported: Boolean,
     linkOn: Boolean,
     keepScreen: Boolean,
     adaptive: Boolean,
@@ -45,6 +47,7 @@ fun SenderScreen(
     onMusicIndex: (Int) -> Unit,
     onVirtual: (Boolean) -> Unit,
     onBrowser: (Boolean) -> Unit,
+    onSingleApp: (Boolean) -> Unit,
     onLink: (Boolean) -> Unit,
     onCarMode: () -> Unit,
     onKeepScreen: (Boolean) -> Unit,
@@ -65,7 +68,15 @@ fun SenderScreen(
     onCopyStatus: () -> Unit
 ) {
     Scaffold(
-        topBar = { SmallTopAppBar(title = "手机端 · 独立虚拟屏投车机") }
+        topBar = {
+            SmallTopAppBar(
+                title = when {
+                    singleApp -> "手机端 · 只投单个 App"
+                    virtualMode -> "手机端 · 独立虚拟屏投车机"
+                    else -> "手机端 · 镜像投车机"
+                }
+            )
+        }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -159,6 +170,19 @@ fun SenderScreen(
                     summary = modeHint
                 )
                 SwitchPreference(
+                    checked = singleApp,
+                    onCheckedChange = onSingleApp,
+                    title = "只投单个 App（Android 14+）",
+                    summary = when {
+                        !singleAppSupported ->
+                            "本机不是 Android 14+，用不了（单应用捕获是 Android 14 才加的）。先用虚拟屏或镜像。"
+                        singleApp ->
+                            "开着：点「开始投屏」后系统会让你选一个 App（比如高德），车机只收到那个 App 的画面，没有状态栏/通知弹窗、手机能正常用。手机上切走它，车机画面会停住。"
+                        else ->
+                            "车机只显示你选的那一个 App，其它一律看不到（比镜像干净，也不需要副屏）。开了会自动关掉「独立虚拟屏」。"
+                    }
+                )
+                SwitchPreference(
                     checked = keepScreen,
                     onCheckedChange = onKeepScreen,
                     title = "保持手机亮屏",
@@ -232,7 +256,8 @@ fun SenderScreen(
             }
             Spacer(Modifier.height(16.dp))
             Text(
-                "原理：默认建一块独立虚拟屏，高德/音乐在那块屏上跑，编码后发给车机。手机主屏还能自己用。若 ROM 不让第三方 App 上副屏，再关掉「独立虚拟屏」改镜像。",
+                "原理：默认建一块独立虚拟屏，高德/音乐在那块屏上跑，编码后发给车机。手机主屏还能自己用。若 ROM 不让第三方 App 上副屏，再关掉「独立虚拟屏」改镜像。\n" +
+                    "Android 14+ 还有第三种：「只投单个 App」——让系统只捕获一个应用，车机就只看到它，不靠副屏也不用录整屏。",
                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                 fontSize = 13.sp,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)

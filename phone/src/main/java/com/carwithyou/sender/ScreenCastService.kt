@@ -47,6 +47,11 @@ import kotlin.math.roundToInt
  *
  * 镜像模式（兜底）：
  *   AUTO_MIRROR 整屏镜像，手机必须分屏，主屏被占用。
+ *
+ * 单 App 模式（Android 14+）：
+ *   系统弹窗里选一个应用（“共享单个应用”），车机只收到那个 App 的画面。
+ *   不需要副屏、不需要任何系统权限，手机上也能正常用别的 App（切走它画面会停）。
+ *   实现上就是镜像会话——App-only 捕获的 MediaProjection 本身只带那一个 App 的内容。
  */
 class ScreenCastService : Service() {
 
@@ -59,6 +64,7 @@ class ScreenCastService : Service() {
         const val EXTRA_DEBUG_SAVE = "debug_save"
         const val EXTRA_VIRTUAL_MODE = "virtual"
         const val EXTRA_BROWSER_MODE = "browser"
+        const val EXTRA_SINGLE_APP = "single_app"
         const val EXTRA_NAV_PKG = "nav"
         const val EXTRA_MUSIC_PKG = "music"
         const val EXTRA_KEEP_SCREEN = "keep_screen"
@@ -73,6 +79,8 @@ class ScreenCastService : Service() {
         @Volatile var running = false
         @Volatile var virtualMode = true
         @Volatile var browserMode = false
+        /** 只投单个 App（Android 14+ 单应用捕获）。镜像家族，与 virtualMode 互斥 */
+        @Volatile var singleAppMode = false
         @Volatile var displayDenied = false // 系统拒往虚拟屏放 Activity（部分机型）→ 已降级镜像
         @Volatile var lastHint = ""
         @Volatile var browserUrl = ""
@@ -84,6 +92,8 @@ class ScreenCastService : Service() {
     private var encoder: MediaCodec? = null
     private var encoderSurface: Surface? = null
     private var vdisplay: VirtualDisplay? = null
+    /** 自绘车机屏（Presentation 路径）。和 VirtualDisplay 一起由 releaseEncoderAndDisplay 释放。 */
+    private var presentation: android.app.Presentation? = null
     private var videoServer: ServerSocket? = null
     private var controlServer: ServerSocket? = null
     private var controlOut: PrintWriter? = null
@@ -132,6 +142,7 @@ class ScreenCastService : Service() {
         debugSave = intent?.getBooleanExtra(EXTRA_DEBUG_SAVE, false) == true
         virtualMode = intent?.getBooleanExtra(EXTRA_VIRTUAL_MODE, true) != false
         browserMode = intent?.getBooleanExtra(EXTRA_BROWSER_MODE, false) != false
+        singleAppMode = intent?.getBooleanExtra(EXTRA_SINGLE_APP, false) == true
         CastConfig.resolutionLocked = virtualMode
         navPkg = intent?.getStringExtra(EXTRA_NAV_PKG).orEmpty()
         musicPkg = intent?.getStringExtra(EXTRA_MUSIC_PKG).orEmpty()
@@ -148,7 +159,7 @@ class ScreenCastService : Service() {
             return START_NOT_STICKY
         }
         AppLog.i(
-            TAG, "开始投屏 mode=${if (virtualMode) "虚拟屏" else "镜像"} " +
+            TAG, "开始投屏 mode=${if (virtualMode) "虚拟屏" else if (singleAppMode) "单App" else "镜像"} " +
                 "输出=${if (browserMode) "浏览器免安装(:$BROWSER_PORT)" else "车机APK(:$VIDEO_PORT)"} " +
                 "导航=$navPkg 音乐=$musicPkg " +
                 "录屏授权=${if (resultCode == Activity.RESULT_OK) "有" else "无"} 保存H264=$debugSave 亮屏=$keepScreen"
@@ -167,6 +178,7 @@ class ScreenCastService : Service() {
         val title = when {
             browserMode && virtualMode -> "车机浏览器打开 http://192.168.43.1:$BROWSER_PORT/"
             browserMode -> "浏览器镜像中（车机免安装）"
+            singleAppMode -> "CarWithYou 只投单个 App（车机只看到它）"
             virtualMode && withProjection -> "车机虚拟屏运行中（录屏授权）"
             virtualMode -> "车机虚拟屏运行中，手机可正常使用"
             else -> "CarWithYou 整屏镜像中"
@@ -261,6 +273,10 @@ class ScreenCastService : Service() {
                     CastConfig.screenW = dm.widthPixels
                     CastConfig.screenH = dm.heightPixels
                     CastConfig.displayId = Display.DEFAULT_DISPLAY
+                    if (singleAppMode) {
+                        AppLog.i(TAG, "单 App 模式：只投系统选中的那一个 App，车机看不到其它任何东西")
+                        lastHint = "单 App 模式：把要投的 App 放到前台（车机上点导航/音乐也能切）。手机上切走它画面会停住。"
+                    }
                     runMirrorSession(proj, dm.densityDpi)
                 }
             } catch (e: Exception) {
@@ -286,6 +302,31 @@ class ScreenCastService : Service() {
             override fun onStop() {
                 AppLog.i(TAG, "MediaProjection stopped（系统收了录屏授权）")
                 stopSelf()
+            }
+
+            /** 单 App 捕获：系统告诉我们被捕获内容变成了多大（Android 14+） */
+            override fun onCapturedContentResize(width: Int, height: Int) {
+                if (width <= 0 || height <= 0) return
+                AppLog.i(TAG, "捕获内容尺寸=$width x $height（单App模式下按此比例显示）")
+                if (singleAppMode) {
+                    // 比的是「长宽比」，不是具体像素：1080x1920 和 720x1280 是同一个比例，不该报黑边
+                    val arContent = width.toDouble() / height
+                    val arStream = CastConfig.videoW.toDouble() / CastConfig.videoH
+                    if (CastConfig.videoW > 0 && CastConfig.videoH > 0 &&
+                        Math.abs(arContent - arStream) > 0.03
+                    ) {
+                        lastHint = "捕获到 ${width}x$height（流是 ${CastConfig.videoW}x${CastConfig.videoH}），" +
+                            "长宽比不同，车机会有黑边。手机上把这个 App 切成车机那样横屏会更好看。"
+                    }
+                }
+            }
+
+            /** 单 App 捕获：被捕获的 App 是否还可见（Android 14+） */
+            override fun onCapturedContentVisibilityChanged(isVisible: Boolean) {
+                AppLog.i(TAG, "捕获内容可见=$isVisible")
+                if (singleAppMode && !isVisible) {
+                    lastHint = "手机上切走了，车机画面会停住。把要投的 App 换回前台就恢复。"
+                }
             }
         }
         projectionCallback = cb
@@ -317,40 +358,61 @@ class ScreenCastService : Service() {
         val (enc, surface) = createEncoder(res.w, res.h, CastConfig.currentBitrate)
         encoder = enc
         encoderSurface = surface
-        // 先试 DisplayManager（自己的屏，Activity 有机会放上去）。
-        // 建不出再走 MediaProjection（部分 ROM 限制副屏）。
-        vdisplay = createIndependentDisplay(res.w, res.h, surface)
-        if (vdisplay == null && proj != null) {
-            try {
-                vdisplay = createProjectionDisplay(proj, res.w, res.h, surface)
+        // 建屏要「建得出来」**且**「放得进 Activity」才算数（见 independentFlags 的说明）。
+        // DisplayManager 的 flags 变体逐个试（实测都放不进 Activity，只为兼容可能的 ROM）。
+        // 这些都不消耗 MediaProjection 的单击令牌，所以降级镜像时 proj 还能复用。
+        for (flags in independentFlags()) {
+            val vd = try {
+                createDisplayWithFlags(res.w, res.h, surface, flags).also {
+                    AppLog.i(TAG, "DisplayManager virtual display flags=$flags id=${it.display.displayId}")
+                }
             } catch (e: Exception) {
-                AppLog.w(TAG, "MediaProjection 建屏也失败：${e.message}")
+                AppLog.w(TAG, "DisplayManager flags=$flags rejected: ${e.message}")
+                null
+            }
+            if (tryHostDesktop("DisplayManager flags=$flags", vd)) {
+                while (scope.isActive && running) {
+                    pumpWithAdapt(enc, CastConfig.currentResShort, allowResize = false)
+                }
+                return
             }
         }
-        if (vdisplay != null) {
-            val displayId = vdisplay?.display?.displayId ?: Display.INVALID_DISPLAY
-            CastConfig.displayId = displayId
-            AppLog.i(TAG, "virtual display id=$displayId ${res.w}x${res.h} dpi=$densityDpi")
-            sendConfig(res.w, res.h)
-            delay(400)
-            // 同步试放桌面：被拒（SecurityException）= 此机不支持虚拟屏，直接降级
-            if (tryDesktop(displayId)) {
-                sendBroadcast(Intent(ACTION_VIRTUAL_READY).setPackage(packageName))
-                mainHandler.postDelayed({ showOverlay() }, 800)
+        runMirrorFallback(proj, "此手机不支持独立虚拟屏，已自动切 CarPlay 镜像（驾驶舱在手机上）")
+    }
+
+    /**
+     * 把桌面放进刚建好的副屏，并等它真落地。落地了返回 true，调用方进推流主循环；
+     * 放不进去（系统拒了）就把屏释掉返回 false，留给下一个 flags 变体。
+     */
+    private suspend fun tryHostDesktop(name: String, vd: VirtualDisplay?): Boolean {
+        if (vd == null) return false
+        vdisplay = vd
+        val displayId = vd.display?.displayId ?: Display.INVALID_DISPLAY
+        CastConfig.displayId = displayId
+        AppLog.i(TAG, "$name 屏 id=$displayId 已建，试放桌面")
+        sendConfig(CastConfig.videoW, CastConfig.videoH)
+        delay(400)
+        // Presentation/Dialog 必须在有 Looper 的线程建，这里是 worker 协程，切回主线程。
+        val viaPresentation = withContext(Dispatchers.Main) { tryPresentation(displayId) }
+        if (viaPresentation || tryDesktop(displayId)) {
+            sendBroadcast(Intent(ACTION_VIRTUAL_READY).setPackage(packageName))
+            mainHandler.postDelayed({ showOverlay() }, 800)
+            if (!viaPresentation) {
                 mainHandler.postDelayed({
                     if (CarDesktopActivity.instance == null) {
                         lastHint = "系统没把桌面放到副屏，已直接拉起导航/音乐。若它们出现在手机上，请改用镜像模式。"
                         launchAppsOntoVirtual()
                     }
                 }, 1600)
-                while (scope.isActive && running) {
-                    pumpWithAdapt(enc, CastConfig.currentResShort, allowResize = false)
-                }
-                return
             }
-            AppLog.w(TAG, "虚拟屏放不进 Activity，自动降级 CarPlay 镜像")
+            return true
         }
-        runMirrorFallback(proj, "此手机不支持独立虚拟屏，已自动切 CarPlay 镜像（驾驶舱在手机上）")
+        AppLog.w(TAG, "$name 屏 id=$displayId 放不进 Activity，换下一个变体")
+        try { vd.release() } catch (_: Exception) {}
+        vdisplay = null
+        CastConfig.displayId = Display.INVALID_DISPLAY
+        delay(200)
+        return false
     }
 
     /** 同步放桌面，返回放没放上去（拒了就降级，不让用户看黑屏） */
@@ -362,6 +424,61 @@ class ScreenCastService : Service() {
             false
         } catch (e: Exception) {
             AppLog.w(TAG, "放桌面失败：${e.message}")
+            false
+        }
+    }
+
+    /**
+     * 把自己画的界面贴到副屏上（Presentation）。这和「往副屏塞 Activity」是两回事：
+     * Presentation 是 Android 为「App 把自己的内容显示到副屏」准备的公开 API，
+     * 走的是 TYPE_PRESENTATION 窗口（token 是它自己的 Binder），不需要 ADD_TRUSTED_DISPLAY
+     * 那类签名权限。亿连/CarLife 的车机界面就是这么来的——它们画自己的 UI，不搬运第三方 App。
+     */
+    private fun tryPresentation(displayId: Int): Boolean {
+        val dm = getSystemService(DISPLAY_SERVICE) as DisplayManager
+        val display = dm.getDisplay(displayId)
+        if (display == null) {
+            AppLog.w(TAG, "Presentation：取不到屏 $displayId")
+            return false
+        }
+        return try {
+            val p = object : android.app.Presentation(this, display) {
+                private val ticker = android.os.Handler(android.os.Looper.getMainLooper())
+                private var n = 0
+                override fun onCreate(savedInstanceState: android.os.Bundle?) {
+                    super.onCreate(savedInstanceState)
+                    AppLog.i(TAG, "Presentation.onCreate 屏=$displayId ${display.name}")
+                    val tv = android.widget.TextView(this@ScreenCastService).apply {
+                        text = "CarWithYou 自绘车机屏 (display $displayId)"
+                        setTextColor(0xFFFFFFFF.toInt())
+                        textSize = 30f
+                        gravity = android.view.Gravity.CENTER
+                    }
+                    val root = android.widget.FrameLayout(this@ScreenCastService).apply {
+                        setBackgroundColor(0xFF0B3D91.toInt())
+                        addView(tv, android.widget.FrameLayout.LayoutParams(-1, -1))
+                    }
+                    setContentView(root)
+                    // 探针：每 400ms 改一次文字。画面在动，编码器就必须持续出帧，
+                    // 用它来证明「采到的确实是这块屏上的内容」，而不是一张静止的空屏。
+                    ticker.post(object : Runnable {
+                        override fun run() {
+                            tv.text = "CarWithYou 自绘车机屏 #" + (n++)
+                            ticker.postDelayed(this, 400)
+                        }
+                    })
+                }
+                override fun onStop() {
+                    ticker.removeCallbacksAndMessages(null)
+                    super.onStop()
+                }
+            }
+            p.setOnShowListener { AppLog.i(TAG, "Presentation 已上屏 $displayId") }
+            p.show()
+            presentation = p
+            true
+        } catch (e: Exception) {
+            AppLog.w(TAG, "Presentation 上屏失败：${e::class.java.simpleName} ${e.message}")
             false
         }
     }
@@ -543,19 +660,41 @@ class ScreenCastService : Service() {
         }
     }
 
+    /**
+     * 独立副屏的 flags 变体。**已实测否证：Android 12+ 普通 App 放不进副屏，别再试了。**
+     *
+     * MuMu(A15) + vivo(A12) 跑了 6 种变体：2(仅 PRESENTATION，私有且不带 OWN_CONTENT_ONLY)、
+     * 514(+系统装饰)、66(+触摸)、10(私有+OWN_CONTENT_ONLY)、11(公开)、1355(公开+TRUSTED)：
+     * 前四种**建屏成功但 Activity 一律 `Permission Denial ... with launchDisplayId=N`**。
+     * 注意 2 就是 `ActivityOptions#setLaunchDisplayId` javadoc 承诺的
+     * 「private displays that are owned by the app」形态 —— 实测被拒，javadoc 与实现不符。
+     * 11/3 这类公开屏：3(公开不带 OWN_CONTENT_ONLY) 建屏就报「需要 ADD_MIRROR_DISPLAY /
+     * CAPTURE_VIDEO_OUTPUT 或 MediaProjection 令牌」，1355 建屏就报 `Requires
+     * ADD_TRUSTED_DISPLAY`（signature）。也就是说只有 trusted 屏才允许放 Activity，而
+     * trusted 屏我们建不出来 —— 死锁。想给车机看某个 App，只能用 Android 14+ 单 App 捕获
+     * （MediaProjectionConfig），或在 root 设备上 `su -c "am start --display N ..."`。
+     *
+     * 既然必败，只留 2 个形态，好尽早降级镜像（每个变体要等约 400ms 才知道没落地）。
+     */
+    private fun independentFlags(): IntArray {
+        val presentation = DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+        val publicFlags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or presentation or
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+        return intArrayOf(presentation, publicFlags)
+    }
+
+    private fun createDisplayWithFlags(w: Int, h: Int, surface: Surface, flags: Int): VirtualDisplay {
+        val dm = getSystemService(DISPLAY_SERVICE) as DisplayManager
+        return dm.createVirtualDisplay(
+            "carwithyou-virtual", w, h, densityDpi, surface, flags, null, mainHandler
+        )
+    }
+
     /** 不镜像主屏：优先 DisplayManager（无录屏条），失败再走 MediaProjection */
     private fun createIndependentDisplay(w: Int, h: Int, surface: Surface): VirtualDisplay? {
-        val dm = getSystemService(DISPLAY_SERVICE) as DisplayManager
-        val presentation = DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION or
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
-        val publicFlags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or presentation
-        val hiddenFlags = FLAG_SUPPORTS_TOUCH or FLAG_TRUSTED or FLAG_DESTROY_CONTENT_ON_REMOVAL
-        val attempts = intArrayOf(publicFlags or hiddenFlags, publicFlags, presentation)
-        for (flags in attempts) {
+        for (flags in independentFlags()) {
             try {
-                val vd = dm.createVirtualDisplay(
-                    "carwithyou-virtual", w, h, densityDpi, surface, flags, null, mainHandler
-                )
+                val vd = createDisplayWithFlags(w, h, surface, flags)
                 AppLog.i(TAG, "DisplayManager virtual display flags=$flags id=${vd.display.displayId}")
                 return vd
             } catch (e: Exception) {
@@ -1075,6 +1214,12 @@ class ScreenCastService : Service() {
     }
 
     private fun switchMainDisplayApp(cmd: String) {
+        // 单 App 模式：车机固定看那一个 App，回桌面/分屏只会把被投的 App 顶到后台、画面卡住
+        if (singleAppMode && (cmd == "home" || cmd == "split")) {
+            lastHint = "单 App 模式下固定在投那一个 App，回桌面/分屏用不了。要点别的 App 请重新投屏。"
+            AppLog.w(TAG, "APP $cmd 在单App模式下被拒")
+            return
+        }
         when (cmd) {
             "home" -> openCarHome()
             "nav" -> if (!AppLauncher.launch(this, navPkg, Display.DEFAULT_DISPLAY)) {
@@ -1112,6 +1257,8 @@ class ScreenCastService : Service() {
     }
 
     private fun releaseEncoderAndDisplay() {
+        try { presentation?.dismiss() } catch (_: Exception) {}
+        presentation = null
         try { vdisplay?.release() } catch (_: Exception) {}
         vdisplay = null
         try { encoder?.stop(); encoder?.release() } catch (_: Exception) {}

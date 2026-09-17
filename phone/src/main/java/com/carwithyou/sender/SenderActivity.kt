@@ -39,6 +39,9 @@ class SenderActivity : AppCompatActivity() {
     private var musicIndex by mutableIntStateOf(0)
     private var virtualMode by mutableStateOf(true)
     private var browserMode by mutableStateOf(false)
+    private var singleAppMode by mutableStateOf(false)
+    /** 单应用捕获是 Android 14(SDK34) 才加的 API */
+    private val singleAppSupported = Build.VERSION.SDK_INT >= 34
     private var linkOn by mutableStateOf(true)
     private var keepScreen by mutableStateOf(true)
     private var adaptive by mutableStateOf(true)
@@ -122,7 +125,11 @@ class SenderActivity : AppCompatActivity() {
                 val brn = CastConfig.bitrateRange(tier)
                 val minB = brn[0] / 1_000_000f
                 val maxB = brn[1] / 1_000_000f
-                val mode = if (ScreenCastService.virtualMode) "虚拟屏#${CastConfig.displayId}" else "镜像"
+                val mode = when {
+                    virtualMode -> "虚拟屏#${CastConfig.displayId}"
+                    ScreenCastService.singleAppMode -> "单App"
+                    else -> "镜像"
+                }
                 "$mode | ${tier}p | %.1fM (%.1f–%.1fM) | 丢帧%.1f%% | 解码%.1fms | RTT%dms$hint".format(
                     br, minB, maxB, drop, dec, lat
                 )
@@ -141,6 +148,7 @@ class SenderActivity : AppCompatActivity() {
         fillAppSpinners()
         virtualMode = prefs.virtualMode
         browserMode = prefs.browserMode
+        singleAppMode = prefs.singleApp && singleAppSupported
         linkOn = prefs.linkEnabled
         if (linkOn) LinkService.start(this)
         keepScreen = prefs.keepScreenOn
@@ -163,14 +171,33 @@ class SenderActivity : AppCompatActivity() {
                     musicIndex = musicIndex,
                     virtualMode = virtualMode,
                     browserMode = browserMode,
+                    singleApp = singleAppMode,
+                    singleAppSupported = singleAppSupported,
                     linkOn = linkOn,
                     keepScreen = keepScreen,
                     adaptive = adaptive,
                     debugSave = debugSave,
                     onNavIndex = { navIndex = it },
                     onMusicIndex = { musicIndex = it },
-                    onVirtual = { virtualMode = it; prefs.virtualMode = it },
+                    onVirtual = {
+                        virtualMode = it
+                        prefs.virtualMode = it
+                        if (it && singleAppMode) { singleAppMode = false; prefs.singleApp = false }
+                    },
                     onBrowser = { browserMode = it; prefs.browserMode = it },
+                    onSingleApp = { on ->
+                        if (on && !singleAppSupported) {
+                            toast("只投单个 App 需要 Android 14+（本机 Android ${Build.VERSION.RELEASE}），先用虚拟屏或镜像")
+                        } else {
+                            singleAppMode = on
+                            prefs.singleApp = on
+                            if (on && virtualMode) { virtualMode = false; prefs.virtualMode = false }
+                            toast(
+                                if (on) "单 App 模式：点「开始投屏」后系统会让你选一个应用，车机只看到它"
+                                else "已关掉单 App 模式"
+                            )
+                        }
+                    },
                     onLink = { setLink(it) },
                     onCarMode = {
                         startActivity(Intent(this, CarModeActivity::class.java))
@@ -247,8 +274,12 @@ class SenderActivity : AppCompatActivity() {
         saveSelectedApps()
         prefs.virtualMode = virtualMode
         prefs.browserMode = browserMode
+        prefs.singleApp = singleAppMode
         prefs.keepScreenOn = keepScreen
-        AppLog.i(TAG, "点「开始投屏」mode=${if (virtualMode) "虚拟屏" else "镜像"} 自适应=${if (adaptive) "开" else "关"}")
+        AppLog.i(
+            TAG,
+            "点「开始投屏」mode=${if (virtualMode) "虚拟屏" else if (singleAppMode) "单App" else "镜像"} 自适应=${if (adaptive) "开" else "关"}"
+        )
         if (virtualMode && selectedNav().isBlank() && selectedMusic().isBlank()) {
             toast("先选导航或音乐")
             return
@@ -274,12 +305,17 @@ class SenderActivity : AppCompatActivity() {
             putExtra(ScreenCastService.EXTRA_DEBUG_SAVE, debugSave)
             putExtra(ScreenCastService.EXTRA_VIRTUAL_MODE, virtualMode)
             putExtra(ScreenCastService.EXTRA_BROWSER_MODE, browserMode)
+            putExtra(ScreenCastService.EXTRA_SINGLE_APP, singleAppMode)
             putExtra(ScreenCastService.EXTRA_NAV_PKG, selectedNav())
             putExtra(ScreenCastService.EXTRA_MUSIC_PKG, selectedMusic())
             putExtra(ScreenCastService.EXTRA_KEEP_SCREEN, keepScreen)
         }
         startForegroundService(i)
-        val mode = if (virtualMode) "虚拟屏（手机可继续用）" else "整屏镜像"
+        val mode = when {
+            virtualMode -> "虚拟屏（手机可继续用）"
+            singleAppMode -> "只投单个 App（系统弹窗里选一个）"
+            else -> "整屏镜像"
+        }
         val out = if (browserMode) "车机浏览器打开 http://${NetUtils.hotspotIp(this)}:${ScreenCastService.BROWSER_PORT}/（降级）" else "车机App连 ${NetUtils.hotspotIp(this)}:8888"
         status = "投屏中 · $mode · $out"
         startStatsPoll()
@@ -295,10 +331,39 @@ class SenderActivity : AppCompatActivity() {
         toast("先给悬浮窗权限，车机屏上才会有切换栏")
     }
 
+    /**
+     * Android 14 起，用户选「共享整个屏幕」后系统会把录屏授权记下来（appop=allow），
+     * 之后再投屏就直接放行、不再弹窗——于是「单 App 模式」会静默退化成整屏镜像。
+     * 这里提前告诉用户，不然他会以为功能没生效。
+     */
+    private fun projectionConsentRemembered(): Boolean = try {
+        val aom = getSystemService(android.app.AppOpsManager::class.java)
+        aom.unsafeCheckOpNoThrow(
+            "android:project_media", android.os.Process.myUid(), packageName
+        ) == android.app.AppOpsManager.MODE_ALLOWED
+    } catch (t: Throwable) {
+        false
+    }
+
     private fun requestProjection() {
-        AppLog.i(TAG, "拉起录屏授权弹窗")
         val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        castPerm.launch(mpm.createScreenCaptureIntent())
+        // Android 14+ 单应用捕获：createConfigForUserChoice() 让系统弹窗多出「共享单个应用」，
+        // 用户选哪个 App，投影里就只有那个 App 的内容。这是普通 App 能实现
+        // 「车机只看导航、手机还能用」的唯一官方路子（不需要副屏，也就绕开了副屏的权限墙）。
+        val intent = if (singleAppMode && singleAppSupported) {
+            if (projectionConsentRemembered()) {
+                AppLog.w(TAG, "系统记住了上次的整屏录屏授权，这次不会弹「选应用」，会变成整屏镜像")
+                toast("系统记住了上次的整屏录屏授权，这次不会再弹「选应用」。想只投一个 App，请先去 设置→应用→Car投屏-手机端 撤销「录屏/投影」权限，再重新投屏")
+            }
+            AppLog.i(TAG, "拉起录屏授权弹窗（单App：在弹窗里选「单个应用」）")
+            mpm.createScreenCaptureIntent(
+                android.media.projection.MediaProjectionConfig.createConfigForUserChoice()
+            )
+        } else {
+            AppLog.i(TAG, "拉起录屏授权弹窗")
+            mpm.createScreenCaptureIntent()
+        }
+        castPerm.launch(intent)
     }
 
     private fun fillAppSpinners() {
