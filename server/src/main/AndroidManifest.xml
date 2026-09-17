@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- server 永不作为应用启动，但要有个 manifest 才能让 AGP 出 APK。
+     它由 app_process 拉起，不需要任何权限声明与组件。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

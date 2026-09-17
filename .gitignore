@@ -4,9 +4,9 @@
 local.properties
 .idea/
 .DS_Store
-/build/
-/app/build/
-/phone/build/
+# 构建产物：写成裸 build/ 才能覆盖所有模块，
+# 原来的 /build/ 只匹配根目录（adb-core/build、server/build 会漏进来）
+build/
 tmp-logs/
 nul
 captures
@@ -14,6 +14,8 @@ captures
 .cxx
 *.apk
 *.aab
+# 由 :server:copyServerJar 生成，构建时自动产出，不进仓库
+app/src/main/res/raw/*.jar
 # Signing
 app/release-key.jks
 *.jks
