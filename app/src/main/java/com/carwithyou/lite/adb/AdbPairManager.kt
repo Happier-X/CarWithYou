@@ -3,6 +3,7 @@ package com.carwithyou.lite.adb
 import android.content.Context
 import android.os.Build
 import com.carwithyou.adb.AdbKeyPair
+import com.carwithyou.lite.AppLog
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -37,6 +38,10 @@ import java.util.Date
  */
 class AdbPairManager(private val context: Context) : AbsAdbConnectionManager() {
 
+    private companion object {
+        const val TAG = "AdbPair"
+    }
+
     private val privateKey: PrivateKey
     private val certificate: X509Certificate
     private val deviceName: String
@@ -47,16 +52,60 @@ class AdbPairManager(private val context: Context) : AbsAdbConnectionManager() {
         val pair = AdbKeyPair.loadOrCreate(keyDir)
         privateKey = pair.privateKey
 
-        val shortId = (privateKey.hashCode() and 0xFFFF).toString(16).padStart(4, '0')
-        deviceName = "CarWithYou-$shortId"
-
         val certFile = File(keyDir, "pair_cert.der")
-        certificate = if (certFile.exists()) {
-            readCert(certFile) ?: generateAndSaveCert(pair.publicKey as RSAPublicKey, certFile)
+        val cached = if (certFile.exists()) readCert(certFile) else null
+        if (cached != null && certMatchesKey(cached, pair.publicKey)) {
+            certificate = cached
+            // 复用已有证书时，设备名必须与证书 CN 保持一致（证书是手机的授权凭据，名字不一致会让用户对账困惑）
+            deviceName = extractCn(cached) ?: "CarWithYou-${stableId(pair.publicKey.encoded)}"
         } else {
-            generateAndSaveCert(pair.publicKey as RSAPublicKey, certFile)
+            if (cached != null) {
+                AppLog.w(TAG, "发现陈旧配对证书（与当前 adbkey 不匹配），重新生成")
+            }
+            val shortId = stableId(pair.publicKey.encoded)
+            deviceName = "CarWithYou-$shortId"
+            certificate = generateAndSaveCert(pair.publicKey as RSAPublicKey, certFile)
         }
+
+        // 这两个值要发给用户对账（手机上会显示），记进诊断日志便于事后核对
+        AppLog.i(TAG, "配对身份就绪：设备名=$deviceName 指纹=$fingerprint " +
+                "密钥文件=${File(keyDir, "adbkey").name}")
     }
+
+    /**
+     * 从密钥字节取 4 位十六进制短 id（**内容稳定，跨重启不变**）。
+     *
+     * 切忌改用 {@code privateKey.hashCode()}：那是对象标识哈希，
+     * 每次进程重启重新从 PKCS8 反序列化出来的对象都不同 → 设备名每次都变，
+     * 而手机上「已配对设备」里记的是首次那个名字，用户会对不上。
+     */
+    private fun stableId(keyBytes: ByteArray): String = try {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        md.digest(keyBytes).take(2).joinToString("") { "%02x".format(it) }
+    } catch (_: Exception) {
+        "0000"
+    }
+
+    /** 提取证书的主题 CN（如 "CarWithYou-e83b"）。 */
+    private fun extractCn(cert: X509Certificate): String? = try {
+        val dn = cert.subjectX500Principal.name
+        dn.split(",").map { it.trim() }.firstOrNull { it.startsWith("CN=", ignoreCase = true) }?.substring(3)
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * 证书公钥是否就是当前这把 adbkey 的公钥（比字节，不比值比较）。
+     *
+     * 不校验的话，一旦 adbkey 被换过（文件丢失/手动替换），留的旧证书会和
+     * 明文连接用的密钥对不上，配对看似成功、后续却要再授权一次。
+     */
+    private fun certMatchesKey(cert: X509Certificate, publicKey: java.security.PublicKey): Boolean =
+        try {
+            cert.publicKey.encoded.contentEquals(publicKey.encoded)
+        } catch (_: Exception) {
+            false
+        }
 
     override fun getPrivateKey(): PrivateKey = privateKey
     override fun getCertificate(): Certificate = certificate
