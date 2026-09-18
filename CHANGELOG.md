@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.7
 ### Added
 - 机型无关的自动降级：虚拟屏放不进 Activity（部分机型 Permission Denial）就当场切 CarPlay 镜像，同一次录屏授权、手机自动弹驾驶舱桌面，不再黑屏
 - 黑屏根因修复（后连车机永远等不到 SPS/PPS）：新客户端连上先发 SPS/PPS（outputFormat → live 流嗅探 → 通用 Baseline 保底三级取），再请一帧关键帧；车机 NAL 类型检测兼容 Annex-B/裸/AVCC 三种封装
