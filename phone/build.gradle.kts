@@ -11,8 +11,8 @@ android {
         applicationId = "com.carwithyou.sender"
         minSdk = 29
         targetSdk = 35
-        versionCode = (project.findProperty("versionCode") as? String)?.toIntOrNull() ?: 107
-        versionName = project.findProperty("versionName") as? String ?: "0.1.7"
+        versionCode = (project.findProperty("versionCode") as? String)?.toIntOrNull() ?: 108
+        versionName = project.findProperty("versionName") as? String ?: "0.1.8"
     }
 
     val releaseKeyPath = System.getenv("SIGNING_KEY_FILE").orEmpty().ifBlank { "../app/release-key.jks" }

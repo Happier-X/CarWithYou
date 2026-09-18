@@ -279,9 +279,19 @@ class AdbStreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         var d = store.adbDensity
         if (w <= 0 || h <= 0 || d <= 0) {
             val auto = queryPhoneDisplay(s)
-            if (w <= 0) w = auto.first
-            if (h <= 0) h = auto.second
             if (d <= 0) d = auto.third
+            if (w <= 0 || h <= 0) {
+                if (store.adbMirror) {
+                    // 镜像就是手机自己那块屏，尺寸不能换
+                    if (w <= 0) w = auto.first
+                    if (h <= 0) h = auto.second
+                } else {
+                    // 独立虚拟屏：跟着**车机**的宽高比走（见 carScreenSize 的注释）
+                    val (cw, ch) = carScreenSize()
+                    if (w <= 0) w = cw
+                    if (h <= 0) h = ch
+                }
+            }
         }
         val args = mutableListOf(
             "width=$w",
@@ -298,6 +308,27 @@ class AdbStreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
         AppLog.i(TAG, "server 参数：${args.joinToString(" ")}")
         return args
+    }
+
+    /**
+     * 虚拟屏尺寸按**车机**屏幕的宽高比来定，长边压到 [MAX_VIRTUAL_LONG] 以内。
+     *
+     * 车机基本是横屏，而手机的 `wm size` 是竖屏：直接拿手机尺寸会让画面在车机上
+     * 缩成中间窄窄一条、左右大片黑边，触摸归一化也被一起压扁。跟着车机走之后
+     * 视频宽高比 == 车机屏宽高比 → fit 恰好等于 fill，既没黑边也不用裁剪。
+     */
+    private fun carScreenSize(): Pair<Int, Int> {
+        val m = resources.displayMetrics
+        val cw = m.widthPixels
+        val ch = m.heightPixels
+        if (cw <= 0 || ch <= 0) return 1280 to 720
+        val long = maxOf(cw, ch).coerceAtMost(MAX_VIRTUAL_LONG)
+        val short = (long.toLong() * minOf(cw, ch) / maxOf(cw, ch)).toInt()
+        // DisplayManager 会把尺寸对齐到 8（请求 900 实际给 904），自己先对齐，
+        // 免得日志里「请求值」和「实际值」对不上、还得反推黑边。
+        // 取下取整：虚拟屏不会超过车机屏，差的那几像素由 fit 自动补，肉眼不可见。
+        fun align8(v: Int) = (v / 8 * 8).coerceAtLeast(8)
+        return align8(long).coerceAtLeast(320) to align8(short).coerceAtLeast(240)
     }
 
     /** 取手机主屏尺寸/密度：`wm size` / `wm density`；失败给 1280x720@240。 */
@@ -598,6 +629,9 @@ class AdbStreamActivity : AppCompatActivity(), SurfaceHolder.Callback {
         const val EXTRA_APP_CMD = "adb_app_cmd"
         const val EXTRA_AUTO_PKG = "adb_auto_pkg"
         private const val TAG = "CarWithYou"
+
+        /** 虚拟屏长边上限：再大对车机观感没收益，白白抬高编码/解码开销 */
+        private const val MAX_VIRTUAL_LONG = 1920
 
         @Volatile private var pendingAppCmd = ""
     /** intent 里临时指定的自动投放包；空=用设置里的导航包 */
